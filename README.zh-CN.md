@@ -2,7 +2,7 @@
 
 Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectComposition 硬件加速，包含 23 种颜色模式、10 种拖尾渲染风格、9 种粒子形状、完整牛顿粒子物理系统（质量、引力、碰撞、电磁力、湍流、流体耦合）、向心力漩涡轨道捕获、音乐响应音频物理、2.5D 深度效果、点击特效和文字/Emoji 粒子。独立 Tool Mod 进程运行——闲置零 CPU，激活时全硬件加速。
 
-**[English README](README.md)**
+**语言：** [English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 
 ---
 

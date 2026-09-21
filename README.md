@@ -2,7 +2,7 @@
 
 A highly customizable mouse cursor trail mod for [Windhawk](https://windhawk.net/). Built on native D3D11 + DirectComposition hardware acceleration, featuring 23 color modes, 10 trail render styles, 9 particle shapes, a full Newtonian particle physics system (mass, gravity, collisions, electromagnetic forces, turbulence, fluid coupling), centripetal vortex orbital capture, music-reactive audio physics, 2.5D depth effects, click effects, and text/emoji particles. Runs as an isolated Tool Mod process — zero CPU when idle, full hardware acceleration when active.
 
-**[中文文档](README.zh-CN.md)**
+**Languages:** [English](README.md) | [简体中文](README.zh-CN.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja-JP.md)
 
 ---
 
