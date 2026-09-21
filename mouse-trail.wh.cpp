@@ -2252,6 +2252,8 @@ int g_msaaSamples = 1;  // MSAA 采样数 1=off / 2 / 4 / 8
 ID3D11Texture2D *g_pMSAATexture = nullptr;  // MSAA 离屏渲染纹理 / MSAA offscreen texture
 ID3D11RenderTargetView *g_pMSAARTV = nullptr;  // MSAA RTV / MSAA render target view
 int g_ssaaScale = 1;  // SSAA 缩放倍数 1=off / 2 / 4
+int g_createdMsaaSamples = 1;  // 离屏纹理实际创建时的 MSAA 配置 / MSAA config the offscreen resources were created with
+int g_createdSsaaScale = 1;    // 离屏纹理实际创建时的 SSAA 配置 / SSAA config the offscreen resources were created with
 int g_renderW = 0, g_renderH = 0;  // 实际渲染分辨率（SSAA 时放大）/ Actual render resolution (scaled for SSAA)
 ID3D11Texture2D *g_pSSAATexture = nullptr;  // SSAA 离屏渲染纹理 / SSAA offscreen RT
 ID3D11RenderTargetView *g_pSSAARTV = nullptr;  // SSAA RTV
@@ -4533,7 +4535,7 @@ static bool NativeRenderFrame(int screenW, int screenH, const std::vector<D2D1_P
     // 双线(5) 渲染两条偏移的带 / double line(5) renders two offset bands
     // 虚线(6) 分段渲染 / dashed(6) segmented rendering
     // 形状拖尾(4) 不渲染带 / shape trail(4) no band
-    if (tailVisible && !smoothed.empty() && g_trailShape != 4) {
+    if (tailVisible && !smoothed.empty() && g_trailShape != 4 && g_trailShape != 10) {
         if (g_trailShape == 1) {
             // 点链：沿路径生成离散圆点 / Dot chain: generate discrete dots along path
             std::vector<D2D1_POINT_2F> dots;
@@ -4634,7 +4636,7 @@ static bool NativeRenderFrame(int screenW, int screenH, const std::vector<D2D1_P
     }
 
     // 4. 运动模糊：绘制历史路径（透明度递减）/ 4. Motion blur: draw history paths (decreasing alpha)
-    if (g_enableMotionBlur && tailVisible && !g_trailHistory.empty()) {
+    if (g_enableMotionBlur && tailVisible && !g_trailHistory.empty() && g_trailShape != 10) {
         for (size_t h = 0; h < g_trailHistory.size(); h++) {
             float histAlpha = fadeAlpha * (0.15f + 0.1f * (float)h / g_trailHistory.size());
             if (histAlpha < 0.02f) continue;
@@ -6301,6 +6303,9 @@ static void RecreateSwapChain(int vW, int vH) {
             Wh_Log(L"SSAA: %dx enabled (%dx%d)", g_ssaaScale, renderW, renderH);
         }
     }
+    // 记录离屏资源实际使用的 AA 配置，供渲染循环检测运行时切换 / Record effective AA config for runtime change detection
+    g_createdMsaaSamples = g_pMSAATexture ? g_msaaSamples : 1;
+    g_createdSsaaScale = useSSAA ? g_ssaaScale : 1;
 
     if (g_pDCompVisual) {
         g_pDCompVisual->SetContent(g_pSwapChain);
@@ -6794,22 +6799,17 @@ static void RenderFrame() {
                 lastTriggerPosY = renderPos.y;
             }
         }
-        // None 模式：跳过整个拖尾激活/淡出逻辑，粒子独立工作 / None mode: skip trail active/fadeout logic entirely, particles work independently
-        if (g_trailShape == 10) {
-            trailActive = false;
-            g_history.clear();
-            g_trailHistory.clear();
-        }
-        if (g_trailShape != 10 && trailActive) {
+        if (trailActive) {
             POINT np = {renderPos.x - vX, renderPos.y - vY};
             g_history.push_front(np);
             while (g_history.size() > (size_t)g_tailLength)
                 g_history.pop_back();
             fadeoutFrame = 0;
+            // 移动时 alpha 快速恢复到 1.0 / Alpha quickly recovers to 1.0 during movement
             g_fadeAlpha += (1.0f - g_fadeAlpha) * 0.4f;
             if (g_fadeAlpha > 1.0f)
                 g_fadeAlpha = 1.0f;
-        } else if (g_trailShape != 10) {
+        } else {
             // ===== 淡出模式：硬截断 / 加速收缩 / 软截断 / Fadeout modes: hard cut / accelerated shrink / soft cut =====
             switch (g_fadeoutMode) {
                 case 0:  // 硬截断：立即清除所有状态，避免下次绘制残留 / Hard cut: clear all state immediately to prevent residual rendering
@@ -6854,12 +6854,6 @@ static void RenderFrame() {
     std::vector<D2D1_POINT_2F> smoothed;
     smoothed.reserve(g_tailLength * 4);  // 预分配，避免多次扩容
     bool havePath = (g_history.size() >= 2);
-    // None 模式：无拖尾路径，但粒子需要基于当前鼠标位置生成 / None mode: no trail path, but particles need current mouse position
-    if (g_trailShape == 10 && !havePath && (abs(vX) > 1 || abs(vY) > 1)) {
-        smoothed.push_back(D2D1::Point2F((float)pt.x, (float)pt.y));
-        smoothed.push_back(D2D1::Point2F((float)(pt.x - vX), (float)(pt.y - vY)));
-        havePath = true;
-    }
     if (havePath) {
         for (auto &p : g_history)
             smoothed.push_back(D2D1::Point2F((float)p.x + g_tailOffsetX, (float)p.y + g_tailOffsetY));
@@ -6924,7 +6918,7 @@ static void RenderFrame() {
 
     // ===== 粒子释放（基于 smoothed 路径的指定位置）===== / Particle spawn (based on specified position on smoothed path)
     if (g_particleMode > 0 && havePath && dwTime - g_lastParticleTime >= (DWORD)g_particleInterval) {
-        bool spawnOK = (g_trailShape == 10) ? true : ((g_particleMode == 1) ? trailActive : true);
+        bool spawnOK = (g_particleMode == 1) ? trailActive : true;
         if (spawnOK) {
             float ratio;
             switch (g_particleOrigin) {
@@ -8015,7 +8009,8 @@ static void RenderFrame() {
     if (!isDrawing && !surfaceDirty)
         return;
 
-    if (!g_pSwapChain || !g_pD2DTargetBitmap || g_cachedVW != vW || g_cachedVH != vH) {
+    if (!g_pSwapChain || !g_pD2DTargetBitmap || g_cachedVW != vW || g_cachedVH != vH
+        || g_createdMsaaSamples != g_msaaSamples || g_createdSsaaScale != g_ssaaScale) {
         RecreateSwapChain(vW, vH);
     }
     if (!g_pD2DDC || !g_pD2DTargetBitmap)
@@ -8146,13 +8141,13 @@ static void RenderFrame() {
     }
 
     // ===== 运动模糊历史帧渲染 =====
-    if (g_enableMotionBlur && tailVisible && havePath && g_trailHistory.size() > 1) {
+    if (g_enableMotionBlur && tailVisible && havePath && g_trailHistory.size() > 1 && g_trailShape != 10) {
         RenderMotionBlur(widthMul, cols, g_fadeAlpha);
         surfaceDirty = true;
     }
 
     // ===== 拖尾（复用已计算的 smoothed 路径）=====
-    if (tailVisible && havePath && g_trailShape != 4) {
+    if (tailVisible && havePath && g_trailShape != 4 && g_trailShape != 10) {
         UpdateColorBrushes(cols, smoothed[0], smoothed.back());
         float glowR = g_enableGlow ? (g_glowIntensity / 100.0f) * 7.0f : 0;
         float glowO = g_enableGlow ? (g_glowIntensity / 100.0f) * 0.28f : 0;
