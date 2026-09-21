@@ -8060,10 +8060,21 @@ static void RenderFrame() {
                     g_pD3DContext->IAGetVertexBuffers(0, 1, &pOldVB, &oldStride, &oldOffset);
                     g_pD3DContext->RSGetViewports(&numVP, &oldVP);
 
-                    // 设置 blit 状态 / Set blit state
+                    // 清除交换链后台缓冲为透明黑，避免旧帧残留 / Clear swap chain back buffer to transparent black to prevent frame persistence
+                    float clearBlack[4] = {0, 0, 0, 0};
+                    g_pD3DContext->ClearRenderTargetView(pSwapRTV, clearBlack);
+
+                    // 保存混合状态 / Save blend state
+                    ID3D11BlendState *pOldBlend = nullptr;
+                    FLOAT oldBlendFactor[4] = {1,1,1,1};
+                    UINT oldSampleMask = 0;
+                    g_pD3DContext->OMGetBlendState(&pOldBlend, oldBlendFactor, &oldSampleMask);
+
+                    // 设置 blit 状态（不透明混合，完全覆盖后台缓冲）/ Set blit state (opaque blend, fully overwrite back buffer)
                     D3D11_VIEWPORT blitVP = {0, 0, (float)g_cachedVW, (float)g_cachedVH, 0, 1};
                     g_pD3DContext->RSSetViewports(1, &blitVP);
                     g_pD3DContext->OMSetRenderTargets(1, &pSwapRTV, nullptr);
+                    g_pD3DContext->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);  // 不透明覆盖 / opaque overwrite
                     g_pD3DContext->IASetInputLayout(nullptr);
                     g_pD3DContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
                     UINT stride = 16, offset = 0;
@@ -8073,6 +8084,10 @@ static void RenderFrame() {
                     g_pD3DContext->PSSetShaderResources(0, 1, &pBlitSRV);
                     g_pD3DContext->PSSetSamplers(0, 1, &g_pBlitSampler);
                     g_pD3DContext->Draw(4, 0);
+
+                    // 恢复混合状态 / Restore blend state
+                    g_pD3DContext->OMSetBlendState(pOldBlend, oldBlendFactor, oldSampleMask);
+                    if (pOldBlend) pOldBlend->Release();
 
                     // 恢复状态 / Restore state
                     g_pD3DContext->RSSetViewports(1, &oldVP);
