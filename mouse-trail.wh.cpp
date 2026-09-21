@@ -8034,14 +8034,6 @@ static void RenderFrame() {
         bool nativeOK = NativeRenderFrame(vW, vH, smoothed, tailVisible, cols, widthMul, g_fadeAlpha, dwTime, vX, vY);
         if (nativeOK) {
             // 原生渲染成功：所有效果（拖尾、粒子、形状、点击、运动模糊）均用 D3D11 原生渲染 / Native render success: all effects via D3D11 native
-            // 物理可视化调试：用 D2D1 叠加绘制速度/受力向量、漩涡、引力源等 / Physics debug: D2D1 overlay for velocity/force vectors, vortices, gravity sources
-            if (g_debugVelocity || g_debugForce || g_debugVortex || g_debugGravity || g_debugCollision) {
-                g_pD2DDC->SetTarget(g_pD2DTargetBitmap);
-                g_pD2DDC->BeginDraw();
-                RenderPhysicsDebugD2D(dwTime);
-                g_pD2DDC->EndDraw();
-            }
-
             // MSAA Resolve + SSAA Blit / MSAA resolve + SSAA downsample blit
             {
                 ID3D11Texture2D *pBackBuffer = nullptr;
@@ -8117,6 +8109,14 @@ static void RenderFrame() {
                 }
                 if (pBackBuffer) pBackBuffer->Release();
             }
+            // 物理可视化调试：用 D2D1 叠加绘制速度/受力向量、漩涡、引力源等（在 blit 之后，避免被清掉）/ Physics debug overlay AFTER blit
+            if (g_debugVelocity || g_debugForce || g_debugVortex || g_debugGravity || g_debugCollision) {
+                g_pD2DDC->SetTarget(g_pD2DTargetBitmap);
+                g_pD2DDC->BeginDraw();
+                RenderPhysicsDebugD2D(dwTime);
+                g_pD2DDC->EndDraw();
+            }
+
             if (g_pSwapChain) {
                 HRESULT presHr = g_pSwapChain->Present(1, 0);
                 if (presHr == DXGI_ERROR_DEVICE_REMOVED || presHr == DXGI_ERROR_DEVICE_RESET) {
