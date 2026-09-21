@@ -6854,6 +6854,12 @@ static void RenderFrame() {
     std::vector<D2D1_POINT_2F> smoothed;
     smoothed.reserve(g_tailLength * 4);  // 预分配，避免多次扩容
     bool havePath = (g_history.size() >= 2);
+    // None 模式：无拖尾路径，但粒子需要基于当前鼠标位置生成 / None mode: no trail path, but particles need current mouse position
+    if (g_trailShape == 10 && !havePath && (abs(vX) > 1 || abs(vY) > 1)) {
+        smoothed.push_back(D2D1::Point2F((float)pt.x, (float)pt.y));
+        smoothed.push_back(D2D1::Point2F((float)(pt.x - vX), (float)(pt.y - vY)));
+        havePath = true;
+    }
     if (havePath) {
         for (auto &p : g_history)
             smoothed.push_back(D2D1::Point2F((float)p.x + g_tailOffsetX, (float)p.y + g_tailOffsetY));
