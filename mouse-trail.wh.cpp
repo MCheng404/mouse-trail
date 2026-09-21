@@ -348,6 +348,7 @@ Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectCo
   - spiral: Spiral
   - lightning: Lightning
   - feather: Feather
+  - none: None
   $options:zh-CN:
   - tapered: 锥形飘带
   - dots: 圆点链
@@ -359,6 +360,7 @@ Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectCo
   - spiral: 螺旋拖尾
   - lightning: 闪电拖尾
   - feather: 羽毛拖尾
+  - none: 无
   $options:zh-TW:
   - tapered: 錐形飄帶
   - dots: 圓點鏈
@@ -370,6 +372,7 @@ Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectCo
   - spiral: 螺旋拖尾
   - lightning: 閃電拖尾
   - feather: 羽毛拖尾
+  - none: 無
   $options:ja-JP:
   - tapered: テーパーリボン
   - dots: ドットチェーン
@@ -381,6 +384,7 @@ Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectCo
   - spiral: スパイラル
   - lightning: ライトニング
   - feather: フェザー
+  - none: なし
 - fadeout_mode: soft
   $name: Fadeout Mode
   $name:zh-CN: 淡出模式
@@ -5245,6 +5249,8 @@ void LoadSettings() {
             g_trailShape = 8;
         else if (wcscmp(str, L"feather") == 0)
             g_trailShape = 9;
+        else if (wcscmp(str, L"none") == 0)
+            g_trailShape = 10;
         else
             g_trailShape = 0;
         Wh_FreeStringSetting(str);
@@ -6476,7 +6482,10 @@ static void RenderFrame() {
                 lastTriggerPosY = renderPos.y;
             }
         }
-        if (trailActive) {
+        // None 模式：拖尾不渲染，但粒子/点击特效仍可工作 / None mode: trail rendering disabled, particles/click effects still work
+        bool trailRenderEnabled = (g_trailShape != 10);
+        if (g_trailShape == 10) trailActive = false;
+        if (trailActive && trailRenderEnabled) {
             POINT np = {renderPos.x - vX, renderPos.y - vY};
             g_history.push_front(np);
             while (g_history.size() > (size_t)g_tailLength)
