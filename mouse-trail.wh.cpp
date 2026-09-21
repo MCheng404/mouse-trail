@@ -638,6 +638,35 @@ Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectCo
   $description:zh-CN: 拖尾边缘抗锯齿宽度（0=硬边，100=极柔和）。
   $description:zh-TW: 拖尾邊緣反鋸齒寬度（0=硬邊，100=極柔和）。
   $description:ja-JP: トレイル端のアンチエイリアス幅（0=硬い端、100=非常に柔らかい）。
+- aa_mode: smooth
+  $name: Anti-Aliasing
+  $name:zh-CN: 抗锯齿
+  $name:zh-TW: アンチエイリアス
+  $name:ja-JP: アンチエイリアス
+  $description: Edge anti-aliasing algorithm.
+  $description:zh-CN: 边缘抗锯齿算法。
+  $description:zh-TW: 邊緣抗鋸齒算法。
+  $description:ja-JP: エッジのアンチエイリアス。
+  $options:
+  - off: Off
+  - smooth: Smooth
+  - crisp: Crisp
+  - extra: Extra Smooth
+  $options:zh-CN:
+  - off: 关闭
+  - smooth: 平滑
+  - crisp: 锐利
+  - extra: 超平滑
+  $options:zh-TW:
+  - off: 關閉
+  - smooth: 平滑
+  - crisp: 銳利
+  - extra: 超平滑
+  $options:ja-JP:
+  - off: オフ
+  - smooth: スムーズ
+  - crisp: シャープ
+  - extra: ウルトラスムーズ
 - enable_head_highlight: true
   $name: Head Highlight
   $name:zh-CN: 头部高光
@@ -2199,6 +2228,7 @@ int g_waveAmplitude = 8, g_waveFrequency = 15;
 bool g_enableGlow = true;
 int g_glowIntensity = 40;
 int g_edgeSoftness = 50;  // 拖尾边缘柔和度（0=硬边，100=极柔和）
+int g_aaMode = 1;  // 抗锯齿模式 0=off 1=smooth 2=crisp 3=extra / AA mode: 0=off 1=smooth 2=crisp 3=extra
 int g_colorMode = 0;
 float g_gradientWarp = 0.5f;  // 渐变扭曲模式的中间色位置（0~1）
 D2D1_COLOR_F g_customColor = {0.0f, 0.75f, 1.0f, 1.0f};
@@ -2835,6 +2865,7 @@ cbuffer ConstantBuffer : register(b0) {
     float edgeSoftness;  // 边缘柔和度（0=硬边，1=极柔和）/ Edge softness (0=hard, 1=very soft)
     float _pad1;
     float _pad2;
+    float aaMode;  // 抗锯齿模式 / AA mode: 0=off 1=smooth 2=crisp 3=extra
 };
 
 struct VS_INPUT {
@@ -2885,6 +2916,7 @@ cbuffer ConstantBuffer : register(b0) {
     float edgeSoftness;
     float _pad1;
     float _pad2;
+    float aaMode;
 };
 
 struct PS_INPUT {
@@ -2896,10 +2928,25 @@ struct PS_INPUT {
 };
 
 float4 PSMain(PS_INPUT input) : SV_TARGET {
-    // 软边缘：|v|→1时alpha衰减，消除三角形带硬边锯齿 / Soft edge: alpha fades as |v|→1, eliminates strip aliasing
-    float inner = 1.0 - edgeSoftness * 0.5;  // 0=硬边(inner=1.0)，1=极柔和(inner=0.5)
+    // 抗锯齿边缘：根据aaMode调整边缘过渡宽度 / AA edge: adjust transition width based on aaMode
     float absV = abs(input.v);
-    float edgeFade = smoothstep(1.0, inner, absV);
+    float edgeFade;
+    if (aaMode < 0.5) {
+        // off：硬边 / off: hard edge
+        edgeFade = (absV < 1.0) ? 1.0 : 0.0;
+    } else if (aaMode < 1.5) {
+        // smooth：默认平滑 / smooth: default
+        float inner = 1.0 - edgeSoftness * 0.5;
+        edgeFade = smoothstep(1.0, inner, absV);
+    } else if (aaMode < 2.5) {
+        // crisp：锐利窄边 / crisp: narrow sharp edge
+        float inner = 1.0 - edgeSoftness * 0.15;
+        edgeFade = smoothstep(1.0, inner, absV);
+    } else {
+        // extra：超宽柔和边 / extra: wide soft edge
+        float inner = 1.0 - edgeSoftness * 0.8;
+        edgeFade = smoothstep(1.0, inner, absV);
+    }
     // Early discard: 完全在边缘外的像素直接丢弃 / Early discard: skip pixels fully outside edge
     if (edgeFade <= 0.001) discard;
     // 渐变采样：GPU硬件插值，无断层 / Gradient sampling: GPU hardware interpolation, no banding
@@ -2954,6 +3001,7 @@ cbuffer ConstantBuffer : register(b0) {
     float edgeSoftness;
     float atlasRows;
     float atlasCols;
+    float aaMode;
 };
 
 struct VS_INPUT {
@@ -3018,6 +3066,7 @@ cbuffer ConstantBuffer : register(b0) {
     float edgeSoftness;
     float atlasRows;
     float atlasCols;
+    float aaMode;
 };
 
 Texture2D charAtlasTex : register(t0);
@@ -3090,9 +3139,22 @@ float4 PSMain(PS_INPUT input) : SV_TARGET {
     float r = length(p);
     // Early discard: 最大形状半径约0.5+边缘余量，超出直接跳过SDF计算 / Early discard: skip SDF for pixels outside max shape radius + margin
     if (r > 0.62) discard;
-    // SDF软边缘抗锯齿，边缘宽度随粒子大小自适应（大粒子更柔和）/ SDF soft-edge AA, edge width adapts to particle size
+    // SDF软边缘抗锯齿，边缘宽度随aaMode和粒子大小自适应 / SDF soft-edge AA, width adapts to aaMode and particle size
     float sdf = shapeSDF(p, r, input.shape);
-    float edge = clamp(0.025 * (input.size / 12.0), 0.01, 0.08);  // 自适应软边缘 / Adaptive soft edge
+    float edge;
+    if (aaMode < 0.5) {
+        // off：硬边 / off: hard edge
+        edge = 0.003;
+    } else if (aaMode < 1.5) {
+        // smooth：默认 / smooth: default
+        edge = clamp(0.025 * (input.size / 12.0), 0.01, 0.08);
+    } else if (aaMode < 2.5) {
+        // crisp：窄边 / crisp: narrow
+        edge = clamp(0.012 * (input.size / 12.0), 0.005, 0.04);
+    } else {
+        // extra：宽边 / extra: wide
+        edge = clamp(0.05 * (input.size / 12.0), 0.02, 0.12);
+    }
     float mask = smoothstep(-edge, edge, sdf);
     if (mask <= 0.001) discard;
     // 合并径向光照 + 2.5D深度光照 / Merged radial + 2.5D depth lighting
@@ -3479,6 +3541,7 @@ static void UpdateConstantBuffer(int width, int height, const GradData* cols = n
         // atlasRows/atlasCols (offset 73-74) / char atlas dimensions
         data[73] = (float)(g_charAtlasRows > 0 ? g_charAtlasRows : 16);
         data[74] = (float)(g_charAtlasCols > 0 ? g_charAtlasCols : 16);
+        data[75] = (float)g_aaMode;
         g_pD3DContext->Unmap(g_pConstantBuffer, 0);
     }
 }
@@ -5004,6 +5067,17 @@ void LoadSettings() {
     g_enableGlow = Wh_GetIntSetting(L"enable_glow") != 0;
     g_glowIntensity = Wh_GetIntSetting(L"glow_intensity");
     g_edgeSoftness = Wh_GetIntSetting(L"edge_softness");
+    // 抗锯齿模式 / AA mode
+    {
+        PCWSTR aaStr = Wh_GetStringSetting(L"aa_mode");
+        if (aaStr) {
+            if (wcscmp(aaStr, L"off") == 0) g_aaMode = 0;
+            else if (wcscmp(aaStr, L"crisp") == 0) g_aaMode = 2;
+            else if (wcscmp(aaStr, L"extra") == 0) g_aaMode = 3;
+            else g_aaMode = 1;  // smooth default
+            Wh_FreeStringSetting(aaStr);
+        }
+    }
     g_enableSmoothGradient = Wh_GetIntSetting(L"enable_smooth_gradient") != 0;
     g_enableTrailShadow = Wh_GetIntSetting(L"enable_trail_shadow") != 0;
     g_particleDensity = Wh_GetIntSetting(L"particle_density");
