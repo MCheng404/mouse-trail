@@ -15,7 +15,7 @@
 /*
 # Mouse Trail
 
-A highly customizable mouse cursor trail with native D3D11 rendering, 23 color modes, 10 trail shapes, 2.5D particle effects, advanced particle physics system, centripetal vortex, music reactive framework, click effects, and cursor color extraction. DirectComposition hardware accelerated, runs as a dedicated process with low CPU usage when idle.
+A highly customizable mouse cursor trail mod for Windhawk. Built on native D3D11 + DirectComposition hardware acceleration, featuring 23 color modes, 10 trail render styles, 9 particle shapes, a full Newtonian particle physics system (mass, gravity, collisions, electromagnetic forces, turbulence, fluid coupling), centripetal vortex orbital capture, music-reactive audio physics, 2.5D depth effects, click effects, and text/emoji particles. Runs as an isolated Tool Mod process — zero CPU when idle, full hardware acceleration when active.
 
 ## Demos
 
@@ -29,27 +29,28 @@ A highly customizable mouse cursor trail with native D3D11 rendering, 23 color m
 
 ### Rendering Architecture
 
-* **Native D3D11 Rendering:** Custom HLSL vertex/pixel shaders with instanced particle rendering. No D2D1 dependency for core trail/particle/shape rendering.
-* **2.5D Particle Effects:** Particles have per-instance z-depth with perspective projection and simple lighting. Particles scale with depth (near = larger, far = smaller) for a 3D feel.
-* **DXGI Flip Swap Chain:** Premultiplied alpha for tear-free composition with DirectComposition. HDR auto-detection with R16G16B16A16_FLOAT fallback.
-* **Dual-Thread Design:** UI thread handles window/message pump, render thread handles all D3D11/DComp work — mouse input never blocks.
-* **Device Loss Recovery:** Auto-rebuilds entire D3D/DComp stack on GPU TDR, driver update, GPU switch, or sleep/resume (proactive detection + WM_POWERBROADCAST).
-* **Display Change Handling:** Auto-resizes and repositions overlay on `WM_DISPLAYCHANGE`.
-* **Additive Blend Glow:** Trail/particle/ripple glow layers use SrcAlpha+One additive blending for more translucent halos.
-* **Fast-Move Interpolation:** When interval ≤10ms, particles are interpolated along the path to eliminate gaps during fast movement.
+* **Native D3D11 Pipeline:** Custom HLSL vertex/pixel shaders with instanced particle rendering. Core trail, particle, and shape rendering does not depend on D2D1.
+* **DirectComposition Hardware Overlay:** Per-pixel alpha via premultiplied DXGI flip swap chain. Tear-free composition with the desktop compositor.
+* **2.5D Depth Effect:** Every particle carries a z-depth with perspective projection, simple lighting, and depth-based scaling (near = larger/brighter, far = smaller/dimmer).
+* **Dual-Thread Design:** UI thread runs the window message pump; render thread owns all D3D11/DComp work. Mouse input is never blocked by rendering.
+* **HDR Auto-Detection:** Detects HDR displays and uses R16G16B16A16_FLOAT automatically; falls back to SDR BGRA8.
+* **Device Loss Recovery:** Proactive `GetDeviceRemovedReason()` polling + `WM_POWERBROADCAST` wake handling. Full D3D/DComp stack rebuilds on GPU TDR, driver updates, GPU switches, or sleep/resume — no black frames.
+* **Display Change Handling:** Auto-resizes and repositions the overlay on monitor changes or resolution switches.
+* **Additive Blend Glow:** Trail, particle, and ripple glow layers use SrcAlpha + One additive blending for translucent halos.
+* **Fast-Move Interpolation:** When frame interval is ≤10ms, particles are interpolated along the cursor path to eliminate gaps during fast movement.
 
-### Trail Shapes (10 modes)
+### Trail Render Styles (10 modes)
 
 * **Tapered Ribbon:** Classic fading ribbon with glow, shadow, and head highlight
-* **Dot Chain:** Beads along the path with configurable density
-* **Function Curve:** Custom mathematical function deforms the trail (sine, damped, heartbeat, swirl, or custom formula)
-* **Wave Curve:** Animated wave deformation
-* **Shape Trail:** Spawns hearts, stars, hexagons, circles, diamonds, triangles, flowers, pentagons, or hexagrams along the path with random velocity, rotation, gravity, configurable interval/size/count/lifetime
+* **Dot Chain:** Beads along the path with configurable density and size
+* **Function Curve:** Custom mathematical function deforms the trail (sine, damped, heartbeat, swirl, or user-defined formula)
+* **Wave Curve:** Animated sinusoidal wave deformation
+* **Shape Trail:** Spawns 9 selectable shapes (heart, star, hexagon, circle, diamond, triangle, flower, pentagon, hexagram, or random) along the path with random velocity, rotation, gravity, and configurable interval/size/count/lifetime
 * **Double Line:** Two parallel trail ribbons
 * **Dashed:** Constant-width segmented dashed line
-* **Spiral:** Spiral deformation along the path
-* **Lightning:** Thin bright jagged line with random branch forks
-* **Feather:** Thin central shaft with angled side barbs, natural feather curve
+* **Spiral:** Spiral deformation along the cursor path
+* **Lightning:** Thin bright jagged main line with 35% probability random branch forks
+* **Feather:** Thin central shaft with angled side barbs and natural feather curvature
 
 ### Color Modes (23 modes)
 
@@ -57,9 +58,9 @@ Single / Flowing Gradient / Rainbow Flow / Warm Flow / Cool Flow / Neon Pulse / 
 
 ### Gradient System
 
-* **Unlimited Colors:** Add any number of gradient colors (up to 16), used as-is
+* **Unlimited Colors:** Add any number of gradient colors (up to 16)
 * **OKLab Perceptual Interpolation:** No gray midpoints, perceptually uniform color transitions
-* **256-Color LUT:** Precomputed lookup table for performance
+* **256-Color LUT:** Precomputed lookup table for zero-per-frame allocation
 * **Flowing Gradient:** Gradient animates along the trail over time
 
 ### Cursor Color Shift (6 modes)
@@ -69,51 +70,69 @@ Off / Complementary (180°) / Analogous (30°) / Triadic (120°) / Split Complem
 ### Visual Effects
 
 * **Bezier Smoothing:** Catmull-Rom spline interpolation for buttery-smooth curves
-* **Motion Blur:** History frame overlay with decreasing opacity (1-5 strength)
-* **Enhanced Glow:** Dual-layer halo (outer + inner) with independent toggles
+* **Motion Blur:** History frame overlay with decreasing opacity (1–5 strength)
+* **Enhanced Glow:** Dual-layer halo (outer glow + inner bloom) with independent toggles
 * **Head Highlight + Trail Shadow:** Premium depth cues
 * **Speed-Reactive Width:** Trail widens when moving fast
 
-### Particle System
+### Particle Physics System
 
-* Released from trail head/middle/tail/custom/random position
-* Cursor attraction + repulsion force creating orbiting motion
-* Shapes: circle, star, hexagram, heart, diamond, triangle, flower, pentagon, hexagon, or text particles
-* Colors fade over lifetime; configurable density, interval (0 = per-frame), acceleration
-* Click starburst particle burst
-* **Particle Mass System:** Each particle has random mass (normal distribution via Box-Muller), affecting inertia, size (∝mass^(1/3)), lifetime, and acceleration (a=F/m)
-* **Particle Gravity:** Newton's law of universal gravitation F=G·m₁·m₂/r² with Plummer softening + Newton's second law a=F/m, supports binary/N-body systems (2-10 bodies)
-* **Centripetal Vortex:** Curved mouse motion captures particles into orbiting tracks with angular momentum conservation, Kepler velocity gradient, orbital precession, and 3D orbital inclination. Particles fly outward when motion stops.
-* **Advanced Physics (optional):** Elastic particle collisions (momentum + energy conservation), Lorentz force (charged particles in magnetic field), Coulomb force (like charges repel, opposite attract), coherent Perlin-like turbulence, viscous coupling between nearby particles, multi-band audio linking
-* **Drag Model:** Linear low-speed drag + quadratic high-speed drag, mass-based inertia (heavy particles retain velocity longer), size-based air resistance (larger particles experience more drag)
-* **Spin Physics:** Particles spin with air damping (rotational drag slows spin over time)
-* **Sleep/Resume Recovery:** Proactive device-lost detection via `GetDeviceRemovedReason()`, plus `WM_POWERBROADCAST` wake handling — GPU resource recreation after sleep/hibernate without black frames
+The mod ships a full Newtonian particle physics engine with independent toggles for every force:
 
-### Music Reactive Framework (v3.4)
+* **Particle Mass:** Each particle gets a random mass (Box-Muller normal distribution). Mass affects inertia (heavy = less drag, retains velocity), size (∝ mass^(1/3)), lifetime, and acceleration (a = F/m)
+* **Particle Gravity:** Newton's law of universal gravitation F = G·m₁·m₂/r² with Plummer softening. Supports 2-body (binary star) or N-body systems (2–10 dominant bodies)
+* **Centripetal Vortex:** Curved mouse motion captures particles into orbiting tracks. Angular momentum conservation, Kepler velocity gradient, orbital precession, and 3D orbital inclination. Particles fly outward when motion stops. Two physical models: Rankine vortex or custom
+* **Elastic Collisions:** Momentum + kinetic energy conservation with inverse-mass position correction
+* **Lorentz Force:** Charged particles circle in a magnetic field (F = q·v×B). Positive charge = counterclockwise, negative = clockwise
+* **Coulomb Force:** Like charges repel, opposite charges attract (F = k·q₁·q₂/r²). Activated alongside Lorentz force
+* **Brownian Motion / Turbulence:** Perlin-like spatially coherent noise field (not pure random jitter). Particles in nearby space receive similar forces, creating flowing turbulence
+* **Viscous Coupling:** Nearby particles (30px) drag each other's velocity, creating fluid-like cluster behavior
+* **Air Drag:** Linear low-speed drag + quadratic high-speed drag. Mass-based inertia and size-based air resistance (larger particles have more drag)
+* **Spin Physics:** Particles spin with rotational air damping (spin speed decays over time)
+* **Springs (Cloth):** Hooke's law springs between nearby particles with axial damping and soft cutoff
+* **Environmental Gravity:** Directional constant acceleration (angle + strength configurable)
+* **Environmental Wind:** Horizontal wind with gusts, direction sway, and high-frequency turbulence
+* **Cursor Attraction + Repulsion:** Force field around the cursor with configurable radius and falloff
+
+### Music Reactive Framework
 
 * **WASAPI Loopback Capture:** Real-time system audio capture (48kHz stereo)
 * **FFT Frequency Analysis:** Cooley-Tukey FFT (256/512/1024/2048 points) with Hann window
-* **Beat Detection:** Three methods — energy threshold, spectral flux, multi-band detection. Low-frequency weighted.
+* **Beat Detection:** Three methods — energy threshold, spectral flux, multi-band detection. Low-frequency weighted
 * **Frequency Band Analysis:** Bass / Mid / Treble energy levels
 * **BPM Estimation:** Real-time tempo estimation
-* **Music-Physics Linking:** Beat → velocity burst, bass → particle size, volume → gravity strength, beat → vortex energy, multi-band → gravity/magnetic/noise
+* **Music-Physics Linking:** Beat → velocity pulse, bass → particle size, volume → gravity strength, beat → vortex energy, multi-band → gravity / magnetic field / thermal noise
+* **Multi-Band Independent Linkage:** Bass links to gravity, mid links to magnetic field, treble links to thermal noise — all independently configurable
+
+### Text & Emoji Particles
+
+* Custom text released as particles (comma-separated phrases render as whole units)
+* Emoji support via Segoe UI Emoji font
+* Configurable font size
+* Color follows the active color mode
 
 ### Click Effects
 
-* Starburst particle burst on click
+* Starburst particle burst on click (count, radius, duration configurable)
 * Expanding ripple ring on click
 * Both toggleable independently
 
+### Localization
+
+* Settings UI fully localized in English, Simplified Chinese, Traditional Chinese, and Japanese
+* Every setting name, description, and dropdown option is translated
+
 ### Performance
 
-* **Super Performance Mode:** Removes all caps (particle/shape limits, fast-path downgrade)
-* **Adaptive Backoff:** Render thread waits 1ms when active, 16ms when idle
-* **Game Detection:** Auto-hide in fullscreen DirectX games
-* **Zero CPU Idle:** Window hidden when cursor stationary and no effects active
+* **Super Performance Mode:** Removes all particle/shape caps and fast-path downgrades
+* **Adaptive Backoff:** Render thread waits 1ms when active (~1000fps headroom), 16ms when idle (~60fps responsive)
+* **Game Detection:** Auto-hides in fullscreen DirectX games
+* **Zero CPU Idle:** Window hidden when cursor is stationary and no effects are active
+* **Background Sampling:** Desktop color sampling runs on a dedicated low-priority thread
 
 ### Function Trail Variables
 
-Available variables: `t` (normalized 0=head 1=tail), `d` (distance from head in px), `time` (seconds). Functions: sin cos exp sqrt abs. Operators: + - * / ^.
+Available in custom function formulas: `t` (normalized 0=head, 1=tail), `d` (distance from head in pixels), `time` (seconds). Functions: sin cos exp sqrt abs. Operators: + - * / ^.
 
 Examples: `sin(d * 0.15) * 8`, `sin(d * 0.25) * exp(0 - t * 2.5) * 10`.
 
@@ -130,32 +149,33 @@ Original overlay/smear architecture inspired by [TheatriChris](https://github.co
 
 # 鼠标拖尾
 
-高度可定制的鼠标拖尾特效，原生 D3D11 渲染，23种颜色模式，10种拖尾形状，2.5D 立体效果，高级粒子物理系统，向心力漩涡，音乐响应框架，点击特效，光标取色。DirectComposition 硬件加速，独立进程运行，闲置时低 CPU 占用。
+Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectComposition 硬件加速，包含 23 种颜色模式、10 种拖尾渲染风格、9 种粒子形状、完整牛顿粒子物理系统（质量、引力、碰撞、电磁力、湍流、流体耦合）、向心力漩涡轨道捕获、音乐响应音频物理、2.5D 深度效果、点击特效和文字/Emoji 粒子。独立 Tool Mod 进程运行——闲置零 CPU，激活时全硬件加速。
 
 ---
 
 ### 渲染架构
 
-* **原生 D3D11 渲染：** 自定义 HLSL 顶点/像素着色器，粒子实例化渲染。核心拖尾/粒子/形状渲染不依赖 D2D1。
-* **2.5D 粒子效果：** 粒子具有实例级 z 深度 + 透视投影 + 简单光照。粒子随深度缩放（近大远小），营造 3D 空间感。
-* **DXGI 翻转交换链：** 预乘 alpha，与 DirectComposition 无撕裂合成。HDR 自动检测，R16G16B16A16_FLOAT 格式自动回退。
-* **双线程设计：** UI 线程处理窗口/消息泵，渲染线程处理所有 D3D11/DComp 工作——鼠标输入永不阻塞。
-* **设备丢失恢复：** GPU TDR、驱动更新或显卡切换时自动重建整个 D3D/DComp 栈。
-* **显示变化处理：** `WM_DISPLAYCHANGE` 时自动调整覆盖层大小和位置。
-* **加法混合发光：** 拖尾/粒子/波纹发光层使用 SrcAlpha+One 加法混合，光晕更通透。
-* **快速移动插值：** 间隔≤10ms 时沿路径插值补粒子，消除快速移动缝隙。
+* **原生 D3D11 管线：** 自定义 HLSL 顶点/像素着色器，粒子实例化渲染。核心拖尾、粒子、形状渲染不依赖 D2D1。
+* **DirectComposition 硬件覆盖层：** 预乘 alpha DXGI 翻转交换链，per-pixel alpha，与桌面合成器无撕裂合成。
+* **2.5D 深度效果：** 每个粒子带 z 深度 + 透视投影 + 简单光照 + 深度缩放（近大远小近亮远暗）。
+* **双线程设计：** UI 线程跑窗口消息泵，渲染线程独占 D3D11/DComp。鼠标输入永不被渲染阻塞。
+* **HDR 自动检测：** 自动识别 HDR 显示器并使用 R16G16B16A16_FLOAT，SDR 自动回退 BGRA8。
+* **设备丢失恢复：** 主动 `GetDeviceRemovedReason()` 轮询 + `WM_POWERBROADCAST` 唤醒处理。GPU TDR、驱动更新、显卡切换或睡眠唤醒时全自动重建 D3D/DComp 栈——无黑帧。
+* **显示变化处理：** 显示器切换或分辨率变化时自动调整覆盖层。
+* **加法混合发光：** 拖尾、粒子、波纹发光层使用 SrcAlpha+One 加法混合，光晕更通透。
+* **快速移动插值：** 帧间隔 ≤10ms 时沿路径插值补粒子，消除快速移动缝隙。
 
-### 拖尾形状（10种）
+### 拖尾渲染风格（10种）
 
 * **锥形飘带：** 经典渐隐飘带，带发光、阴影和头部高光
-* **圆点链：** 沿路径排列的圆点，密度可调
+* **圆点链：** 沿路径排列的圆点，密度和大小可调
 * **函数曲线：** 自定义数学函数变形轨迹（正弦、阻尼、心跳、漩涡或自定义公式）
-* **波浪曲线：** 动态波浪变形
-* **形状拖尾：** 沿路径生成爱心、五角星、六边形、圆形、菱形、三角形、花朵、五边形、六芒星，带随机速度、旋转、重力，间隔/大小/数量/存活时间可调
+* **波浪曲线：** 动态正弦波变形
+* **形状拖尾：** 沿路径生成 9 种可选形状（爱心、五角星、六边形、圆形、菱形、三角形、花朵、五边形、六芒星或随机），带随机速度、旋转、重力，间隔/大小/数量/存活时间可调
 * **双线拖尾：** 两条平行拖尾带
 * **虚线拖尾：** 常量宽度分段虚线
 * **螺旋拖尾：** 沿路径螺旋变形
-* **闪电拖尾：** 细亮锯齿线 + 随机分支
+* **闪电拖尾：** 细亮锯齿主线 + 35% 概率随机分支
 * **羽毛拖尾：** 细主轴 + 两侧斜向羽枝，自然羽毛弧度
 
 ### 颜色模式（23种）
@@ -164,9 +184,9 @@ Original overlay/smear architecture inspired by [TheatriChris](https://github.co
 
 ### 渐变系统
 
-* **任意数量颜色：** 添加任意数量渐变颜色（最多16种），写入多少用多少
+* **任意数量颜色：** 添加任意数量渐变颜色（最多 16 种）
 * **OKLab 感知均匀插值：** 无灰暗中点，感知均匀的色彩过渡
-* **256色 LUT：** 预计算查找表，保证性能
+* **256色 LUT：** 预计算查找表，零帧分配
 * **流动渐变：** 渐变沿拖尾随时间流动
 
 ### 取色偏移（6种模式）
@@ -176,48 +196,69 @@ Original overlay/smear architecture inspired by [TheatriChris](https://github.co
 ### 视觉特效
 
 * **贝塞尔平滑：** Catmull-Rom 样条插值，曲线如丝般顺滑
-* **运动模糊：** 历史帧叠加，透明度递减（1-5强度）
+* **运动模糊：** 历史帧叠加，透明度递减（1–5 强度）
 * **增强发光：** 双层光晕（外晕+内辉），独立开关
 * **头部高光 + 拖尾阴影：** 高级质感深度提示
 * **速度响应宽度：** 快速移动时拖尾变宽
 
-### 粒子系统
+### 粒子物理系统
 
-* 从拖尾开头/中间/结尾/自定义/随机位置释放
-* 光标吸引 + 排斥力，形成绕飞运动
-* 形状：圆形、五角星、六芒星、爱心、菱形、三角形、花朵、五边形、六边形或文字粒子
-* 颜色随生命周期渐变；密度、间隔（0=每帧）、加速度可调
-* 点击星爆粒子迸发
-* **粒子质量系统：** 每个粒子有随机质量（Box-Muller 正态分布），影响惯性、大小（∝质量^(1/3)）、生命周期和加速度（a=F/m）
-* **粒子万有引力：** 牛顿万有引力定律 F=G·m₁·m₂/r² + Plummer 软化 + 牛顿第二定律 a=F/m，支持双星/N体系统（2-10体）
-* **向心力漩涡：** 鼠标做曲线运动时，粒子被捕获到轨道上旋转，角动量守恒 + 开普勒速度梯度 + 轨道进动 + 3D轨道倾角。停止运动后粒子离心甩出。
-* **高级物理（可选）：** 粒子弹性碰撞（动量+动能守恒）、洛伦兹力（带电粒子在磁场中运动）、布朗运动（热噪声）、多频段音频联动
+模组内置完整牛顿粒子物理引擎，每个力都有独立开关：
 
-### 音乐响应框架（v3.4）
+* **粒子质量：** 每个粒子有随机质量（Box-Muller 正态分布）。影响惯性（重=阻力小，速度保持久）、大小（∝质量^(1/3)）、生命周期和加速度（a=F/m）
+* **粒子万有引力：** 牛顿万有引力定律 F=G·m₁·m₂/r² + Plummer 软化。支持双星（双星系统）或 N 体系统（2–10 个主导天体）
+* **向心力漩涡：** 鼠标做曲线运动时粒子被捕获到轨道上。角动量守恒 + 开普勒速度梯度 + 轨道进动 + 3D 轨道倾角。停止运动后粒子离心甩出。两种物理模型：Rankine 漩涡或自定义
+* **弹性碰撞：** 动量 + 动能守恒，按质量反比位置修正
+* **洛伦兹力：** 带电粒子在磁场中做圆周运动（F=q·v×B）。正电荷逆时针，负电荷顺时针
+* **库仑力：** 同号电荷相斥，异号电荷相吸（F=k·q₁·q₂/r²）。与洛伦兹力联动开启
+* **布朗运动/湍流：** Perlin-like 空间连贯噪声场（非纯随机抖动）。空间相邻粒子受到相似力，产生流动感湍流
+* **粘性耦合：** 邻近粒子（30px）互相拖拽速度，产生流体般的团簇行为
+* **空气阻力：** 低速线性阻力 + 高速二次阻力。质量惯性 + 大小空气阻力（大粒子阻力更大）
+* **自旋物理：** 粒子自旋带旋转空气阻尼（自旋速度随时间衰减）
+* **弹簧（布料）：** 邻近粒子间胡克定律弹簧 + 沿连线阻尼 + 软化截止
+* **环境重力：** 方向恒定加速度（角度+强度可调）
+* **环境风：** 水平风 + 阵风 + 方向摆动 + 高频湍流
+* **光标吸引+排斥：** 光标周围力场，半径和衰减可调
+
+### 音乐响应框架
 
 * **WASAPI 回环捕获：** 实时系统音频捕获（48kHz 立体声）
-* **FFT 频率分析：** Cooley-Tukey FFT（256/512/1024/2048点）+ Hann 窗
-* **节拍检测：** 三种方式——能量阈值、频谱通量、多频段检测。低频权重最高。
+* **FFT 频率分析：** Cooley-Tukey FFT（256/512/1024/2048 点）+ Hann 窗
+* **节拍检测：** 三种方式——能量阈值、频谱通量、多频段检测。低频权重最高
 * **频段分析：** 低频/中频/高频能量级别
 * **BPM 估计：** 实时节拍速度估计
-* **音乐物理联动：** 节拍→速度爆发、低频→粒子大小、音量→引力强度、节拍→漩涡能量、多频段→引力/磁场/噪声
+* **音乐物理联动：** 节拍→速度脉冲、低频→粒子大小、音量→引力强度、节拍→漩涡能量、多频段→引力/磁场/热噪声
+* **多频段独立联动：** 低频→引力，中频→磁场，高频→热噪声——全部独立可调
+
+### 文字与 Emoji 粒子
+
+* 自定义文字作为粒子释放（逗号分隔词组整体渲染不拆字）
+* Emoji 支持（Segoe UI Emoji 字体）
+* 字号可调
+* 颜色跟随当前颜色模式
 
 ### 点击特效
 
-* 点击时星爆粒子迸发
+* 点击时星爆粒子迸发（数量、半径、持续时间可调）
 * 点击时扩散波纹环
 * 两者可独立开关
 
+### 本地化
+
+* 设置界面完整支持英文、简体中文、繁体中文、日语
+* 每个设置项的名称、描述和下拉选项均已翻译
+
 ### 性能
 
-* **超级性能模式：** 解除所有上限（粒子/形状限制、快速路径降级）
-* **自适应退避：** 渲染线程活跃时等待1ms，闲置时16ms
+* **超级性能模式：** 解除所有粒子/形状上限和快速路径降级
+* **自适应退避：** 渲染线程活跃时等待 1ms（约 1000fps 余量），闲置时 16ms（约 60fps 响应）
 * **游戏检测：** 全屏 DirectX 游戏时自动隐藏
-* **零 CPU 闲置：** 鼠标静止且无特效时窗口隐藏，CPU 占用为 0
+* **零 CPU 闲置：** 鼠标静止且无特效时窗口隐藏
+* **后台采样：** 桌面颜色采样在独立低优先级线程运行
 
 ### 函数轨迹变量
 
-自定义公式中可使用：`t`（归一化位置 0=头 1=尾）、`d`（距头部像素距离）、`time`（秒）。支持函数：sin cos exp sqrt abs，运算符：+ - * / ^。
+自定义公式中可使用：`t`（归一化位置 0=头 1=尾）、`d`（距头部像素距离）、`time`（秒）。函数：sin cos exp sqrt abs。运算符：+ - * / ^。
 
 示例：`sin(d * 0.15) * 8`，`sin(d * 0.25) * exp(0 - t * 2.5) * 10`。
 
