@@ -3777,7 +3777,7 @@ static void NativeRenderParticles(int screenW, int screenH) {
     if (glowCount == 0 && normalCount == 0) return;
 
     // 设置渲染状态 / Set render state
-    UpdateConstantBuffer(screenW, screenH);
+    UpdateConstantBuffer(g_renderW, g_renderH);
     g_pD3DContext->IASetInputLayout(g_pParticleLayout);
     g_pD3DContext->VSSetShader(g_pParticleVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pParticlePS, nullptr, 0);
@@ -4099,7 +4099,7 @@ static ShapeVertsCache GetShapeVerts(int shapeType) {
 // 形状拖尾原生渲染（v3）：直接生成世界坐标顶点，一次绘制 / Shape trail native rendering (v3): generate world-space verts, single draw
 // 公共D3D11渲染状态设置 / Common D3D11 render state setup
 static void SetNativeRenderState(int screenW, int screenH, D3D11_PRIMITIVE_TOPOLOGY topology) {
-    UpdateConstantBuffer(screenW, screenH);
+    UpdateConstantBuffer(g_renderW, g_renderH);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
