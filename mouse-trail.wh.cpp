@@ -3779,7 +3779,7 @@ static void NativeRenderParticles(int screenW, int screenH) {
     if (glowCount == 0 && normalCount == 0) return;
 
     // 设置渲染状态 / Set render state
-    UpdateConstantBuffer(g_renderW, g_renderH);
+    UpdateConstantBuffer(screenW, screenH);
     g_pD3DContext->IASetInputLayout(g_pParticleLayout);
     g_pD3DContext->VSSetShader(g_pParticleVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pParticlePS, nullptr, 0);
@@ -3839,7 +3839,7 @@ static void NativeRenderTrail(const std::vector<D2D1_POINT_2F>& smoothed, float 
         widths[i] = (i == sl - 1) ? 0.5f : 10.0f * taper * widthMul;
     }
 
-    UpdateConstantBuffer(g_renderW, g_renderH, &cols);
+    UpdateConstantBuffer(screenW, screenH, &cols);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
@@ -3941,7 +3941,7 @@ static void NativeRenderLineTrail(const std::vector<D2D1_POINT_2F>& pts, float w
         if (ln > 0) { ddx /= ln; ddy /= ln; } else { ddx = 1; ddy = 0; }
         nx[i] = -ddy; ny[i] = ddx;
     }
-    UpdateConstantBuffer(g_renderW, g_renderH, &cols);
+    UpdateConstantBuffer(screenW, screenH, &cols);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
@@ -4101,7 +4101,7 @@ static ShapeVertsCache GetShapeVerts(int shapeType) {
 // 形状拖尾原生渲染（v3）：直接生成世界坐标顶点，一次绘制 / Shape trail native rendering (v3): generate world-space verts, single draw
 // 公共D3D11渲染状态设置 / Common D3D11 render state setup
 static void SetNativeRenderState(int screenW, int screenH, D3D11_PRIMITIVE_TOPOLOGY topology) {
-    UpdateConstantBuffer(g_renderW, g_renderH);
+    UpdateConstantBuffer(screenW, screenH);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
@@ -4306,7 +4306,7 @@ static void NativeRenderDotChain(const std::vector<D2D1_POINT_2F>& path, float d
     if (verts.size() > 4096) verts.resize(4096);
     if (shadowVerts.size() > 4096) shadowVerts.resize(4096);
 
-    UpdateConstantBuffer(g_renderW, g_renderH, &cols);
+    UpdateConstantBuffer(screenW, screenH, &cols);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
