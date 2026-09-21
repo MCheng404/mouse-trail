@@ -2947,6 +2947,7 @@ cbuffer ConstantBuffer : register(b0) {
     float _pad1;
     float _pad2;
     float aaMode;  // 抗锯齿模式 / AA mode: 0=off 1=smooth 2=crisp 3=extra
+    float textAspect; // 文字宽高比 / text aspect ratio
 };
 
 struct VS_INPUT {
@@ -2998,6 +2999,7 @@ cbuffer ConstantBuffer : register(b0) {
     float _pad1;
     float _pad2;
     float aaMode;
+    float textAspect;
 };
 
 struct PS_INPUT {
@@ -3083,6 +3085,7 @@ cbuffer ConstantBuffer : register(b0) {
     float atlasRows;
     float atlasCols;
     float aaMode;
+    float textAspect;
 };
 
 struct VS_INPUT {
@@ -3110,12 +3113,15 @@ VS_OUTPUT VSMain(VS_INPUT input) {
     // 2.5D 透视缩放 / 2.5D perspective scale
     float scale = 1.0 + input.instancePos.z * perspective;
     float finalSize = input.instanceSize * scale;  // 预计算最终大小 / Precompute final size
+    // 文字粒子：按宽高比拉伸 X，避免长句被压缩成正方形 / Text particles: stretch X by aspect ratio to avoid squishing
+    float textScaleX = (input.instanceShape > 9.5) ? textAspect : 1.0;
+    float2 stretchedPos = float2(input.quadPos.x * textScaleX, input.quadPos.y);
     // 自旋转：只旋转顶点位置，不旋转uv（同时旋转会抵消）/ Self-rotation: rotate vertices only, not uv
     float cosR = cos(input.instanceRot);
     float sinR = sin(input.instanceRot);
     float2 rotatedPos = float2(
-        input.quadPos.x * cosR - input.quadPos.y * sinR,
-        input.quadPos.x * sinR + input.quadPos.y * cosR
+        stretchedPos.x * cosR - stretchedPos.y * sinR,
+        stretchedPos.x * sinR + stretchedPos.y * cosR
     );
     float2 worldPos = input.instancePos.xy + rotatedPos * finalSize;
     // 屏幕坐标 → NDC（fused multiply-add）/ Screen → NDC (fused multiply-add)
@@ -3148,6 +3154,7 @@ cbuffer ConstantBuffer : register(b0) {
     float atlasRows;
     float atlasCols;
     float aaMode;
+    float textAspect;
 };
 
 Texture2D charAtlasTex : register(t0);
@@ -3315,6 +3322,7 @@ int g_charAtlasCols = 0;                           // 图集列数 / atlas colum
 int g_charAtlasRows = 0;                          // 图集行数 / atlas rows
 int g_charAtlasCellW = 0;                          // 单元格宽 / cell width
 int g_charAtlasCellH = 0;                         // 单元格高 / cell height
+float g_textAspectRatio = 1.0f;                      // 文字宽高比 / text cell aspect ratio
 std::vector<std::wstring> g_atlasChars;                // 图集词组列表 / atlas phrase list
 
 // 构建字符图集：把所有字符渲染到一张 D3D11 纹理 / Build char atlas: render all chars to one D3D11 texture
@@ -3361,6 +3369,7 @@ static void BuildCharAtlas() {
     const float SS = 2.0f; // 超采样倍数 / supersampling factor
     g_charAtlasCellW = (int)(g_textFontSize * maxPhraseLen * SS + 16);
     g_charAtlasCellH = (int)(g_textFontSize * SS + 8);
+    g_textAspectRatio = (g_charAtlasCellH > 0) ? (float)g_charAtlasCellW / (float)g_charAtlasCellH : 1.0f;
     UINT atlasW = (UINT)(g_charAtlasCols * g_charAtlasCellW);
     UINT atlasH = (UINT)(g_charAtlasRows * g_charAtlasCellH);
 
@@ -3691,6 +3700,7 @@ static void UpdateConstantBuffer(int width, int height, const GradData* cols = n
         data[73] = (float)(g_charAtlasRows > 0 ? g_charAtlasRows : 16);
         data[74] = (float)(g_charAtlasCols > 0 ? g_charAtlasCols : 16);
         data[75] = (float)g_aaMode;
+        data[76] = g_textAspectRatio;
         g_pD3DContext->Unmap(g_pConstantBuffer, 0);
     }
 }
@@ -7697,8 +7707,14 @@ static void RenderFrame() {
                         }
                         // 弹性碰撞：距离小于两粒子半径之和时 / Elastic collision: when distance < sum of radii
                         if (g_enableParticleCollision) {
-                            float radiusI = g_particles[i].size * 0.5f;
-                            float radiusJ = g_particles[j].size * 0.5f;
+                            // 文字粒子使用实际渲染尺寸的包围圆半径 / Text particles use actual rendered bounding circle radius
+                            float sizeMulCol = g_particleSizeMultiplier / 100.0f;
+                            float radiusI = (g_particles[i].shapeType == 10)
+                                ? (g_textFontSize * 0.5f * sizeMulCol * 0.5f) * sqrtf(1.0f + g_textAspectRatio * g_textAspectRatio)
+                                : g_particles[i].size * 0.5f;
+                            float radiusJ = (g_particles[j].shapeType == 10)
+                                ? (g_textFontSize * 0.5f * sizeMulCol * 0.5f) * sqrtf(1.0f + g_textAspectRatio * g_textAspectRatio)
+                                : g_particles[j].size * 0.5f;
                             float minDist = radiusI + radiusJ;
                             if (dist < minDist) {
                                 // 位置修正：按质量反比分配位移，重粒子移动少、轻粒子移动多 / Position correction: inverse-mass distribution, heavy moves less, light moves more
