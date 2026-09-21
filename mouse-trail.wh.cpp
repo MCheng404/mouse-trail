@@ -6794,20 +6794,22 @@ static void RenderFrame() {
                 lastTriggerPosY = renderPos.y;
             }
         }
-        // None 模式：拖尾不渲染，但粒子/点击特效仍可工作 / None mode: trail rendering disabled, particles/click effects still work
-        bool trailRenderEnabled = (g_trailShape != 10);
-        if (g_trailShape == 10) trailActive = false;
-        if (trailActive && trailRenderEnabled) {
+        // None 模式：跳过整个拖尾激活/淡出逻辑，粒子独立工作 / None mode: skip trail active/fadeout logic entirely, particles work independently
+        if (g_trailShape == 10) {
+            trailActive = false;
+            g_history.clear();
+            g_trailHistory.clear();
+        }
+        if (g_trailShape != 10 && trailActive) {
             POINT np = {renderPos.x - vX, renderPos.y - vY};
             g_history.push_front(np);
             while (g_history.size() > (size_t)g_tailLength)
                 g_history.pop_back();
             fadeoutFrame = 0;
-            // 移动时 alpha 快速恢复到 1.0 / Alpha quickly recovers to 1.0 during movement
             g_fadeAlpha += (1.0f - g_fadeAlpha) * 0.4f;
             if (g_fadeAlpha > 1.0f)
                 g_fadeAlpha = 1.0f;
-        } else {
+        } else if (g_trailShape != 10) {
             // ===== 淡出模式：硬截断 / 加速收缩 / 软截断 / Fadeout modes: hard cut / accelerated shrink / soft cut =====
             switch (g_fadeoutMode) {
                 case 0:  // 硬截断：立即清除所有状态，避免下次绘制残留 / Hard cut: clear all state immediately to prevent residual rendering
@@ -6916,7 +6918,7 @@ static void RenderFrame() {
 
     // ===== 粒子释放（基于 smoothed 路径的指定位置）===== / Particle spawn (based on specified position on smoothed path)
     if (g_particleMode > 0 && havePath && dwTime - g_lastParticleTime >= (DWORD)g_particleInterval) {
-        bool spawnOK = (g_particleMode == 1) ? trailActive : true;
+        bool spawnOK = (g_trailShape == 10) ? true : ((g_particleMode == 1) ? trailActive : true);
         if (spawnOK) {
             float ratio;
             switch (g_particleOrigin) {
