@@ -667,35 +667,70 @@ Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectCo
   - smooth: スムーズ
   - crisp: シャープ
   - extra: ウルトラスムーズ
-- msaa_level: off
-  $name: MSAA
-  $name:zh-CN: MSAA 多重采样
-  $name:zh-TW: MSAA 多重採樣
-  $name:ja-JP: MSAA
-  $description: Multi-Sample Anti-Aliasing. Hardware edge smoothing. Off uses analytic SAA only.
-  $description:zh-CN: 硬件多重采样抗锯齿。关闭时仅使用解析抗锯齿。
-  $description:zh-TW: 硬體多重採樣抗鋸齒。關閉時僅使用解析抗鋸齒。
-  $description:ja-JP: ハードウェアMSAA。オフでは解析AAのみ使用。
+- enable_msaa: false
+  $name: Enable MSAA
+  $name:zh-CN: 启用 MSAA
+  $name:zh-TW: 啟用 MSAA
+  $name:ja-JP: MSAAを有効化
+  $description: Multi-Sample Anti-Aliasing. Hardware edge smoothing.
+  $description:zh-CN: 硬件多重采样抗锯齿，平滑三角形边缘。
+  $description:zh-TW: 硬體多重採樣抗鋸齒。
+  $description:ja-JP: ハードウェアMSAA。
+- msaa_level: 4x
+  $name: MSAA Level
+  $name:zh-CN: MSAA 级别
+  $name:zh-TW: MSAA レベル
+  $name:ja-JP: MSAAレベル
+  $description: MSAA sample count.
+  $description:zh-CN: MSAA 采样数。
+  $description:zh-TW: MSAAサンプル数。
+  $description:ja-JP: MSAAサンプル数。
   $options:
-  - off: Off
   - 2x: 2x
   - 4x: 4x
   - 8x: 8x
   $options:zh-CN:
-  - off: 关闭
   - 2x: 2x
   - 4x: 4x
   - 8x: 8x
   $options:zh-TW:
-  - off: 關閉
   - 2x: 2x
   - 4x: 4x
   - 8x: 8x
   $options:ja-JP:
-  - off: オフ
   - 2x: 2x
   - 4x: 4x
   - 8x: 8x
+- enable_ssaa: false
+  $name: Enable SSAA
+  $name:zh-CN: 启用 SSAA
+  $name:zh-TW: 啟用 SSAA
+  $name:ja-JP: SSAAを有効化
+  $description: Supersample Anti-Aliasing. Render at higher resolution then downsample. Best quality but GPU intensive.
+  $description:zh-CN: 超采样抗锯齿，更高分辨率渲染再降采样。质量最高但耗 GPU。
+  $description:zh-TW: スーパーサンプリングAA。高解像度レンダリング後ダウンサンプル。最高画質だがGPU負荷大。
+  $description:ja-JP: スーパーサンプリングAA。最高画質。
+- ssaa_level: 2x
+  $name: SSAA Scale
+  $name:zh-CN: SSAA 缩放
+  $name:zh-TW: SSAA スケール
+  $name:ja-JP: SSAAスケール
+  $description: Render resolution scale factor.
+  $description:zh-CN: 渲染分辨率缩放倍数。
+  $description:zh-TW: レンダリング解像度倍率。
+  $description:ja-JP: レンダリング解像度倍率。
+  $options:
+  - 2x: 2x
+  - 4x: 4x
+  $options:zh-CN:
+  - 2x: 2x
+  - 4x: 4x
+  $options:zh-TW:
+  - 2x: 2x
+  - 4x: 4x
+  $options:ja-JP:
+  - 2x: 2x
+  - 4x: 4x
 - enable_head_highlight: true
   $name: Head Highlight
   $name:zh-CN: 头部高光
@@ -2216,6 +2251,17 @@ ID3D11RenderTargetView *g_pCachedRTV = nullptr;  // 缓存的后台缓冲 RTV（
 int g_msaaSamples = 1;  // MSAA 采样数 1=off / 2 / 4 / 8
 ID3D11Texture2D *g_pMSAATexture = nullptr;  // MSAA 离屏渲染纹理 / MSAA offscreen texture
 ID3D11RenderTargetView *g_pMSAARTV = nullptr;  // MSAA RTV / MSAA render target view
+int g_ssaaScale = 1;  // SSAA 缩放倍数 1=off / 2 / 4
+int g_renderW = 0, g_renderH = 0;  // 实际渲染分辨率（SSAA 时放大）/ Actual render resolution (scaled for SSAA)
+ID3D11Texture2D *g_pSSAATexture = nullptr;  // SSAA 离屏渲染纹理 / SSAA offscreen RT
+ID3D11RenderTargetView *g_pSSAARTV = nullptr;  // SSAA RTV
+ID3D11ShaderResourceView *g_pSSAASRV = nullptr;  // SSAA SRV (for blit)
+ID3D11Texture2D *g_pSSAAResolveTexture = nullptr;  // MSAA resolve 目标（仅MSAA+SSAA时）/ MSAA resolve target (only when MSAA+SSAA)
+ID3D11ShaderResourceView *g_pSSAAResolveSRV = nullptr;  // resolve 纹理 SRV / resolve texture SRV
+ID3D11VertexShader *g_pBlitVS = nullptr;
+ID3D11PixelShader *g_pBlitPS = nullptr;
+ID3D11Buffer *g_pBlitVB = nullptr;  // 全屏四边形 VB / fullscreen quad VB
+ID3D11SamplerState *g_pBlitSampler = nullptr;
 IDCompositionDevice *g_pDCompDevice = nullptr;
 IDCompositionTarget *g_pDCompTarget = nullptr;
 IDCompositionVisual *g_pDCompVisual = nullptr;
@@ -3207,6 +3253,27 @@ float4 PSMain(PS_INPUT input) : SV_TARGET {
 }
 )";
 
+// SSAA 降采样着色器：全屏四边形采样离屏纹理 / SSAA downsample shader: fullscreen quad sampling offscreen
+static const char* g_blitVS = R"(
+struct VS_IN { float2 pos : POSITION; float2 uv : TEXCOORD0; };
+struct VS_OUT { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
+VS_OUT VSMain(VS_IN input) {
+    VS_OUT o;
+    o.pos = float4(input.pos, 0.0, 1.0);
+    o.uv = input.uv;
+    return o;
+}
+)";
+
+static const char* g_blitPS = R"(
+Texture2D offscreenTex : register(t0);
+SamplerState offscreenSampler : register(s0);
+struct VS_OUT { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
+float4 PSMain(VS_OUT input) : SV_TARGET {
+    return offscreenTex.Sample(offscreenSampler, input.uv);
+}
+)";
+
 // ---- 顶点结构（v3.3：添加 v 垂直坐标用于软边缘和管光）----
 struct VertexPosColor {
     float x, y, z;     // 位置 + 深度（2.5D）
@@ -3394,6 +3461,42 @@ static bool InitNativeRendering() {
         if (FAILED(g_pD3DDevice->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &g_pNativePS))) break;
         if (FAILED(g_pD3DDevice->CreateVertexShader(pvsBlob->GetBufferPointer(), pvsBlob->GetBufferSize(), nullptr, &g_pParticleVS))) break;
         if (FAILED(g_pD3DDevice->CreatePixelShader(ppsBlob->GetBufferPointer(), ppsBlob->GetBufferSize(), nullptr, &g_pParticlePS))) break;
+
+        // 编译 SSAA blit 着色器 / Compile SSAA blit shaders
+        ID3DBlob *bvsBlob = nullptr, *bpsBlob = nullptr;
+        if (!CompileShader(g_blitVS, "VSMain", "vs_4_0", &bvsBlob)) break;
+        if (!CompileShader(g_blitPS, "PSMain", "ps_4_0", &bpsBlob)) break;
+        if (FAILED(g_pD3DDevice->CreateVertexShader(bvsBlob->GetBufferPointer(), bvsBlob->GetBufferSize(), nullptr, &g_pBlitVS))) break;
+        if (FAILED(g_pD3DDevice->CreatePixelShader(bpsBlob->GetBufferPointer(), bpsBlob->GetBufferSize(), nullptr, &g_pBlitPS))) break;
+        bvsBlob->Release();
+        bpsBlob->Release();
+
+        // 创建全屏四边形 VB（NDC 坐标 + UV）/ Create fullscreen quad VB (NDC coords + UV)
+        {
+            float quadVerts[] = {
+                -1.0f, -1.0f,  0.0f, 1.0f,
+                 1.0f, -1.0f,  1.0f, 1.0f,
+                -1.0f,  1.0f,  0.0f, 0.0f,
+                 1.0f,  1.0f,  1.0f, 0.0f,
+            };
+            D3D11_BUFFER_DESC vbDesc = {};
+            vbDesc.Usage = D3D11_USAGE_DEFAULT;
+            vbDesc.ByteWidth = sizeof(quadVerts);
+            vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+            D3D11_SUBRESOURCE_DATA vbInit = {};
+            vbInit.pSysMem = quadVerts;
+            g_pD3DDevice->CreateBuffer(&vbDesc, &vbInit, &g_pBlitVB);
+        }
+        // 创建双线性采样器 / Create bilinear sampler
+        {
+            D3D11_SAMPLER_DESC sampDesc = {};
+            sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+            g_pD3DDevice->CreateSamplerState(&sampDesc, &g_pBlitSampler);
+        }
 
         // 输入布局：通用顶点（位置+深度+颜色+u坐标+v坐标）/ Input layout: generic vertex (pos+depth+color+u+v)
         D3D11_INPUT_ELEMENT_DESC layoutDesc[] = {
@@ -3734,7 +3837,7 @@ static void NativeRenderTrail(const std::vector<D2D1_POINT_2F>& smoothed, float 
         widths[i] = (i == sl - 1) ? 0.5f : 10.0f * taper * widthMul;
     }
 
-    UpdateConstantBuffer(screenW, screenH, &cols);
+    UpdateConstantBuffer(g_renderW, g_renderH, &cols);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
@@ -3836,7 +3939,7 @@ static void NativeRenderLineTrail(const std::vector<D2D1_POINT_2F>& pts, float w
         if (ln > 0) { ddx /= ln; ddy /= ln; } else { ddx = 1; ddy = 0; }
         nx[i] = -ddy; ny[i] = ddx;
     }
-    UpdateConstantBuffer(screenW, screenH, &cols);
+    UpdateConstantBuffer(g_renderW, g_renderH, &cols);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
@@ -4201,7 +4304,7 @@ static void NativeRenderDotChain(const std::vector<D2D1_POINT_2F>& path, float d
     if (verts.size() > 4096) verts.resize(4096);
     if (shadowVerts.size() > 4096) shadowVerts.resize(4096);
 
-    UpdateConstantBuffer(screenW, screenH, &cols);
+    UpdateConstantBuffer(g_renderW, g_renderH, &cols);
     g_pD3DContext->IASetInputLayout(g_pNativeLayout);
     g_pD3DContext->VSSetShader(g_pNativeVS, nullptr, 0);
     g_pD3DContext->PSSetShader(g_pNativePS, nullptr, 0);
@@ -4407,8 +4510,15 @@ static bool NativeRenderFrame(int screenW, int screenH, const std::vector<D2D1_P
     g_pD3DContext->ClearRenderTargetView(g_pCachedRTV, clearColor);
     g_pD3DContext->OMSetRenderTargets(1, &g_pCachedRTV, nullptr);
 
-    // 设置视口 / Set viewport
-    D3D11_VIEWPORT vp = {0, 0, (float)screenW, (float)screenH, 0, 1};
+    // 设置视口（SSAA 时使用放大后的渲染分辨率）/ Set viewport (use scaled resolution for SSAA)
+    int renderW = screenW, renderH = screenH;
+    if (g_ssaaScale > 1) {
+        renderW = screenW * g_ssaaScale;
+        renderH = screenH * g_ssaaScale;
+    }
+    g_renderW = renderW;
+    g_renderH = renderH;
+    D3D11_VIEWPORT vp = {0, 0, (float)renderW, (float)renderH, 0, 1};
     g_pD3DContext->RSSetViewports(1, &vp);
 
     // 1. 粒子渲染（Instanced）/ 1. Particle rendering (instanced)
@@ -5111,15 +5221,30 @@ void LoadSettings() {
         }
     }
     // MSAA 级别 / MSAA level
-    {
+    bool enableMsaa = Wh_GetIntSetting(L"enable_msaa") != 0;
+    if (enableMsaa) {
         PCWSTR msaaStr = Wh_GetStringSetting(L"msaa_level");
         if (msaaStr) {
             if (wcscmp(msaaStr, L"2x") == 0) g_msaaSamples = 2;
             else if (wcscmp(msaaStr, L"4x") == 0) g_msaaSamples = 4;
             else if (wcscmp(msaaStr, L"8x") == 0) g_msaaSamples = 8;
-            else g_msaaSamples = 1;
+            else g_msaaSamples = 4;
             Wh_FreeStringSetting(msaaStr);
         }
+    } else {
+        g_msaaSamples = 1;
+    }
+    // SSAA 缩放 / SSAA scale
+    bool enableSsaa = Wh_GetIntSetting(L"enable_ssaa") != 0;
+    if (enableSsaa) {
+        PCWSTR ssaaStr = Wh_GetStringSetting(L"ssaa_level");
+        if (ssaaStr) {
+            if (wcscmp(ssaaStr, L"4x") == 0) g_ssaaScale = 4;
+            else g_ssaaScale = 2;
+            Wh_FreeStringSetting(ssaaStr);
+        }
+    } else {
+        g_ssaaScale = 1;
     }
     g_enableSmoothGradient = Wh_GetIntSetting(L"enable_smooth_gradient") != 0;
     g_enableTrailShadow = Wh_GetIntSetting(L"enable_trail_shadow") != 0;
@@ -6107,40 +6232,73 @@ static void RecreateSwapChain(int vW, int vH) {
         }
     }
 
-    // MSAA 离屏渲染纹理创建 / MSAA offscreen render target creation
+    // MSAA + SSAA 离屏渲染纹理创建 / MSAA + SSAA offscreen render target creation
     if (g_pMSAATexture) { g_pMSAATexture->Release(); g_pMSAATexture = nullptr; }
     if (g_pMSAARTV) { g_pMSAARTV->Release(); g_pMSAARTV = nullptr; }
-    if (g_msaaSamples > 1) {
-        // 检查设备支持的最大 MSAA 质量等级 / Check max MSAA quality support
-        UINT msaaQuality = 0;
+    if (g_pSSAATexture) { g_pSSAATexture->Release(); g_pSSAATexture = nullptr; }
+    if (g_pSSAARTV) { g_pSSAARTV->Release(); g_pSSAARTV = nullptr; }
+    if (g_pSSAASRV) { g_pSSAASRV->Release(); g_pSSAASRV = nullptr; }
+    if (g_pSSAAResolveTexture) { g_pSSAAResolveTexture->Release(); g_pSSAAResolveTexture = nullptr; }
+    if (g_pSSAAResolveSRV) { g_pSSAAResolveSRV->Release(); g_pSSAAResolveSRV = nullptr; }
+
+    int renderW = vW, renderH = vH;
+    bool useSSAA = (g_ssaaScale > 1);
+    bool useMSAA = (g_msaaSamples > 1);
+
+    if (useSSAA) {
+        renderW = vW * g_ssaaScale;
+        renderH = vH * g_ssaaScale;
+    }
+
+    // 创建离屏渲染纹理（可能带 MSAA）/ Create offscreen RT (possibly with MSAA)
+    UINT msaaQuality = 0;
+    if (useMSAA) {
         HRESULT hrCheck = g_pD3DDevice->CheckMultisampleQualityLevels(
             g_swapChainFormat, g_msaaSamples, &msaaQuality);
-        if (SUCCEEDED(hrCheck) && msaaQuality > 0) {
-            D3D11_TEXTURE2D_DESC msaaDesc = {};
-            msaaDesc.Width = vW;
-            msaaDesc.Height = vH;
-            msaaDesc.MipLevels = 1;
-            msaaDesc.ArraySize = 1;
-            msaaDesc.Format = g_swapChainFormat;
-            msaaDesc.SampleDesc.Count = g_msaaSamples;
-            msaaDesc.SampleDesc.Quality = msaaQuality - 1;
-            msaaDesc.Usage = D3D11_USAGE_DEFAULT;
-            msaaDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
-            msaaDesc.CPUAccessFlags = 0;
-            msaaDesc.MiscFlags = 0;
-            if (SUCCEEDED(g_pD3DDevice->CreateTexture2D(&msaaDesc, nullptr, &g_pMSAATexture))) {
-                if (FAILED(g_pD3DDevice->CreateRenderTargetView(g_pMSAATexture, nullptr, &g_pMSAARTV))) {
-                    g_pMSAATexture->Release(); g_pMSAATexture = nullptr;
-                } else {
-                    // 渲染时使用 MSAA RTV / Render to MSAA RTV
-                    g_pCachedRTV->Release(); g_pCachedRTV = g_pMSAARTV;
-                    g_pMSAARTV->AddRef();  // g_pCachedRTV 和 g_pMSAARTV 共享所有权 / shared ownership
-                    Wh_Log(L"MSAA: %dx enabled (quality %d)", g_msaaSamples, msaaQuality);
-                }
-            }
-        } else {
-            Wh_Log(L"MSAA: %dx not supported, falling back to off", g_msaaSamples);
+        if (FAILED(hrCheck) || msaaQuality == 0) {
+            Wh_Log(L"MSAA: %dx not supported, disabling", g_msaaSamples);
+            useMSAA = false;
             g_msaaSamples = 1;
+        }
+    }
+
+    D3D11_TEXTURE2D_DESC rtDesc = {};
+    rtDesc.Width = renderW;
+    rtDesc.Height = renderH;
+    rtDesc.MipLevels = 1;
+    rtDesc.ArraySize = 1;
+    rtDesc.Format = g_swapChainFormat;
+    rtDesc.SampleDesc.Count = useMSAA ? g_msaaSamples : 1;
+    rtDesc.SampleDesc.Quality = useMSAA ? (msaaQuality - 1) : 0;
+    rtDesc.Usage = D3D11_USAGE_DEFAULT;
+    rtDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    rtDesc.CPUAccessFlags = 0;
+    rtDesc.MiscFlags = 0;
+
+    if (useMSAA) {
+        // MSAA 离屏纹理 / MSAA offscreen texture
+        if (SUCCEEDED(g_pD3DDevice->CreateTexture2D(&rtDesc, nullptr, &g_pMSAATexture))) {
+            g_pD3DDevice->CreateRenderTargetView(g_pMSAATexture, nullptr, &g_pMSAARTV);
+        }
+        // MSAA resolve 目标（非 MSAA 同尺寸纹理）/ MSAA resolve target (non-MSAA same size)
+        rtDesc.SampleDesc.Count = 1;
+        rtDesc.SampleDesc.Quality = 0;
+        rtDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        if (SUCCEEDED(g_pD3DDevice->CreateTexture2D(&rtDesc, nullptr, &g_pSSAAResolveTexture))) {
+            g_pD3DDevice->CreateShaderResourceView(g_pSSAAResolveTexture, nullptr, &g_pSSAAResolveSRV);
+        }
+        g_pCachedRTV->Release(); g_pCachedRTV = g_pMSAARTV;
+        g_pMSAARTV->AddRef();
+        Wh_Log(L"MSAA: %dx + SSAA: %dx enabled", g_msaaSamples, g_ssaaScale);
+    } else if (useSSAA) {
+        // 纯 SSAA 离屏纹理（带 SRV 供 blit）/ Pure SSAA offscreen (with SRV for blit)
+        rtDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        if (SUCCEEDED(g_pD3DDevice->CreateTexture2D(&rtDesc, nullptr, &g_pSSAATexture))) {
+            g_pD3DDevice->CreateRenderTargetView(g_pSSAATexture, nullptr, &g_pSSAARTV);
+            g_pD3DDevice->CreateShaderResourceView(g_pSSAATexture, nullptr, &g_pSSAASRV);
+            g_pCachedRTV->Release(); g_pCachedRTV = g_pSSAARTV;
+            g_pSSAARTV->AddRef();
+            Wh_Log(L"SSAA: %dx enabled (%dx%d)", g_ssaaScale, renderW, renderH);
         }
     }
 
@@ -7869,13 +8027,65 @@ static void RenderFrame() {
                 g_pD2DDC->EndDraw();
             }
 
-            // MSAA Resolve：将 MSAA 离屏纹理解析到交换链后台缓冲 / MSAA resolve: resolve MSAA offscreen to swap chain back buffer
-            if (g_msaaSamples > 1 && g_pMSAATexture) {
+            // MSAA Resolve + SSAA Blit / MSAA resolve + SSAA downsample blit
+            {
                 ID3D11Texture2D *pBackBuffer = nullptr;
-                if (SUCCEEDED(g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&pBackBuffer))) {
-                    g_pD3DContext->ResolveSubresource(pBackBuffer, 0, g_pMSAATexture, 0, g_swapChainFormat);
-                    pBackBuffer->Release();
+                ID3D11RenderTargetView *pSwapRTV = nullptr;
+                g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&pBackBuffer);
+
+                if (g_msaaSamples > 1 && g_pMSAATexture && g_pSSAAResolveTexture) {
+                    // MSAA resolve 到非 MSAA 纹理 / MSAA resolve to non-MSAA texture
+                    g_pD3DContext->ResolveSubresource(g_pSSAAResolveTexture, 0, g_pMSAATexture, 0, g_swapChainFormat);
                 }
+
+                if ((g_msaaSamples > 1 && g_pSSAAResolveSRV) || (g_ssaaScale > 1 && g_pSSAASRV)) {
+                    // SSAA/MSAA 降采样 blit 到交换链后台缓冲 / Downsample blit to swap chain back buffer
+                    g_pD3DDevice->CreateRenderTargetView(pBackBuffer, nullptr, &pSwapRTV);
+                    ID3D11ShaderResourceView *pBlitSRV = (g_msaaSamples > 1) ? g_pSSAAResolveSRV : g_pSSAASRV;
+
+                    // 保存当前状态 / Save current state
+                    ID3D11RenderTargetView *pOldRTV = nullptr;
+                    ID3D11ShaderResourceView *pOldSRV = nullptr;
+                    ID3D11VertexShader *pOldVS = nullptr;
+                    ID3D11PixelShader *pOldPS = nullptr;
+                    ID3D11Buffer *pOldVB = nullptr;
+                    UINT oldStride = 0, oldOffset = 0;
+                    D3D11_VIEWPORT oldVP; UINT numVP = 1;
+                    g_pD3DContext->OMGetRenderTargets(1, &pOldRTV, nullptr);
+                    g_pD3DContext->PSGetShaderResources(0, 1, &pOldSRV);
+                    g_pD3DContext->VSGetShader(&pOldVS, nullptr, nullptr);
+                    g_pD3DContext->PSGetShader(&pOldPS, nullptr, nullptr);
+                    g_pD3DContext->IAGetVertexBuffers(0, 1, &pOldVB, &oldStride, &oldOffset);
+                    g_pD3DContext->RSGetViewports(&numVP, &oldVP);
+
+                    // 设置 blit 状态 / Set blit state
+                    D3D11_VIEWPORT blitVP = {0, 0, (float)g_cachedVW, (float)g_cachedVH, 0, 1};
+                    g_pD3DContext->RSSetViewports(1, &blitVP);
+                    g_pD3DContext->OMSetRenderTargets(1, &pSwapRTV, nullptr);
+                    g_pD3DContext->IASetInputLayout(nullptr);
+                    g_pD3DContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+                    UINT stride = 16, offset = 0;
+                    g_pD3DContext->IASetVertexBuffers(0, 1, &g_pBlitVB, &stride, &offset);
+                    g_pD3DContext->VSSetShader(g_pBlitVS, nullptr, 0);
+                    g_pD3DContext->PSSetShader(g_pBlitPS, nullptr, 0);
+                    g_pD3DContext->PSSetShaderResources(0, 1, &pBlitSRV);
+                    g_pD3DContext->PSSetSamplers(0, 1, &g_pBlitSampler);
+                    g_pD3DContext->Draw(4, 0);
+
+                    // 恢复状态 / Restore state
+                    g_pD3DContext->RSSetViewports(1, &oldVP);
+                    g_pD3DContext->OMSetRenderTargets(1, &pOldRTV, nullptr);
+                    g_pD3DContext->VSSetShader(pOldVS, nullptr, 0);
+                    g_pD3DContext->PSSetShader(pOldPS, nullptr, 0);
+                    g_pD3DContext->IASetVertexBuffers(0, 1, &pOldVB, &oldStride, &oldOffset);
+                    if (pOldRTV) pOldRTV->Release();
+                    if (pOldSRV) pOldSRV->Release();
+                    if (pOldVS) pOldVS->Release();
+                    if (pOldPS) pOldPS->Release();
+                    if (pOldVB) pOldVB->Release();
+                    if (pSwapRTV) pSwapRTV->Release();
+                }
+                if (pBackBuffer) pBackBuffer->Release();
             }
             if (g_pSwapChain) {
                 HRESULT presHr = g_pSwapChain->Present(1, 0);
@@ -8239,6 +8449,15 @@ static void ReleaseAllRenderResources() {
     if (g_pSolidOuterBrush) { g_pSolidOuterBrush->Release(); g_pSolidOuterBrush = nullptr; }
     if (g_pMSAARTV) { g_pMSAARTV->Release(); g_pMSAARTV = nullptr; }
     if (g_pMSAATexture) { g_pMSAATexture->Release(); g_pMSAATexture = nullptr; }
+    if (g_pSSAAResolveSRV) { g_pSSAAResolveSRV->Release(); g_pSSAAResolveSRV = nullptr; }
+    if (g_pSSAAResolveTexture) { g_pSSAAResolveTexture->Release(); g_pSSAAResolveTexture = nullptr; }
+    if (g_pSSAASRV) { g_pSSAASRV->Release(); g_pSSAASRV = nullptr; }
+    if (g_pSSAARTV) { g_pSSAARTV->Release(); g_pSSAARTV = nullptr; }
+    if (g_pSSAATexture) { g_pSSAATexture->Release(); g_pSSAATexture = nullptr; }
+    if (g_pBlitSampler) { g_pBlitSampler->Release(); g_pBlitSampler = nullptr; }
+    if (g_pBlitVB) { g_pBlitVB->Release(); g_pBlitVB = nullptr; }
+    if (g_pBlitPS) { g_pBlitPS->Release(); g_pBlitPS = nullptr; }
+    if (g_pBlitVS) { g_pBlitVS->Release(); g_pBlitVS = nullptr; }
     if (g_pCachedRTV) { g_pCachedRTV->Release(); g_pCachedRTV = nullptr; }
     if (g_pD2DTargetBitmap) { g_pD2DTargetBitmap->Release(); g_pD2DTargetBitmap = nullptr; }
     if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
