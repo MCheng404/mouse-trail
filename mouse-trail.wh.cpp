@@ -667,6 +667,35 @@ Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectCo
   - smooth: スムーズ
   - crisp: シャープ
   - extra: ウルトラスムーズ
+- msaa_level: off
+  $name: MSAA
+  $name:zh-CN: MSAA 多重采样
+  $name:zh-TW: MSAA 多重採樣
+  $name:ja-JP: MSAA
+  $description: Multi-Sample Anti-Aliasing. Hardware edge smoothing. Off uses analytic SAA only.
+  $description:zh-CN: 硬件多重采样抗锯齿。关闭时仅使用解析抗锯齿。
+  $description:zh-TW: 硬體多重採樣抗鋸齒。關閉時僅使用解析抗鋸齒。
+  $description:ja-JP: ハードウェアMSAA。オフでは解析AAのみ使用。
+  $options:
+  - off: Off
+  - 2x: 2x
+  - 4x: 4x
+  - 8x: 8x
+  $options:zh-CN:
+  - off: 关闭
+  - 2x: 2x
+  - 4x: 4x
+  - 8x: 8x
+  $options:zh-TW:
+  - off: 關閉
+  - 2x: 2x
+  - 4x: 4x
+  - 8x: 8x
+  $options:ja-JP:
+  - off: オフ
+  - 2x: 2x
+  - 4x: 4x
+  - 8x: 8x
 - enable_head_highlight: true
   $name: Head Highlight
   $name:zh-CN: 头部高光
@@ -2184,6 +2213,9 @@ bool g_isHDRMode = false;  // 当前是否HDR模式
 DXGI_FORMAT g_swapChainFormat = DXGI_FORMAT_B8G8R8A8_UNORM;  // 当前交换链格式
 ID2D1Bitmap1 *g_pD2DTargetBitmap = nullptr;
 ID3D11RenderTargetView *g_pCachedRTV = nullptr;  // 缓存的后台缓冲 RTV（随交换链重建，避免每帧创建）
+int g_msaaSamples = 1;  // MSAA 采样数 1=off / 2 / 4 / 8
+ID3D11Texture2D *g_pMSAATexture = nullptr;  // MSAA 离屏渲染纹理 / MSAA offscreen texture
+ID3D11RenderTargetView *g_pMSAARTV = nullptr;  // MSAA RTV / MSAA render target view
 IDCompositionDevice *g_pDCompDevice = nullptr;
 IDCompositionTarget *g_pDCompTarget = nullptr;
 IDCompositionVisual *g_pDCompVisual = nullptr;
@@ -5078,6 +5110,17 @@ void LoadSettings() {
             Wh_FreeStringSetting(aaStr);
         }
     }
+    // MSAA 级别 / MSAA level
+    {
+        PCWSTR msaaStr = Wh_GetStringSetting(L"msaa_level");
+        if (msaaStr) {
+            if (wcscmp(msaaStr, L"2x") == 0) g_msaaSamples = 2;
+            else if (wcscmp(msaaStr, L"4x") == 0) g_msaaSamples = 4;
+            else if (wcscmp(msaaStr, L"8x") == 0) g_msaaSamples = 8;
+            else g_msaaSamples = 1;
+            Wh_FreeStringSetting(msaaStr);
+        }
+    }
     g_enableSmoothGradient = Wh_GetIntSetting(L"enable_smooth_gradient") != 0;
     g_enableTrailShadow = Wh_GetIntSetting(L"enable_trail_shadow") != 0;
     g_particleDensity = Wh_GetIntSetting(L"particle_density");
@@ -6061,6 +6104,43 @@ static void RecreateSwapChain(int vW, int vH) {
             g_pD3DDevice->CreateRenderTargetView(pRtvTexture, nullptr, &g_pCachedRTV);
             pRtvTexture->Release();
             pRtvSurface->Release();
+        }
+    }
+
+    // MSAA 离屏渲染纹理创建 / MSAA offscreen render target creation
+    if (g_pMSAATexture) { g_pMSAATexture->Release(); g_pMSAATexture = nullptr; }
+    if (g_pMSAARTV) { g_pMSAARTV->Release(); g_pMSAARTV = nullptr; }
+    if (g_msaaSamples > 1) {
+        // 检查设备支持的最大 MSAA 质量等级 / Check max MSAA quality support
+        UINT msaaQuality = 0;
+        HRESULT hrCheck = g_pD3DDevice->CheckMultisampleQualityLevels(
+            g_swapChainFormat, g_msaaSamples, &msaaQuality);
+        if (SUCCEEDED(hrCheck) && msaaQuality > 0) {
+            D3D11_TEXTURE2D_DESC msaaDesc = {};
+            msaaDesc.Width = vW;
+            msaaDesc.Height = vH;
+            msaaDesc.MipLevels = 1;
+            msaaDesc.ArraySize = 1;
+            msaaDesc.Format = g_swapChainFormat;
+            msaaDesc.SampleDesc.Count = g_msaaSamples;
+            msaaDesc.SampleDesc.Quality = msaaQuality - 1;
+            msaaDesc.Usage = D3D11_USAGE_DEFAULT;
+            msaaDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+            msaaDesc.CPUAccessFlags = 0;
+            msaaDesc.MiscFlags = 0;
+            if (SUCCEEDED(g_pD3DDevice->CreateTexture2D(&msaaDesc, nullptr, &g_pMSAATexture))) {
+                if (FAILED(g_pD3DDevice->CreateRenderTargetView(g_pMSAATexture, nullptr, &g_pMSAARTV))) {
+                    g_pMSAATexture->Release(); g_pMSAATexture = nullptr;
+                } else {
+                    // 渲染时使用 MSAA RTV / Render to MSAA RTV
+                    g_pCachedRTV->Release(); g_pCachedRTV = g_pMSAARTV;
+                    g_pMSAARTV->AddRef();  // g_pCachedRTV 和 g_pMSAARTV 共享所有权 / shared ownership
+                    Wh_Log(L"MSAA: %dx enabled (quality %d)", g_msaaSamples, msaaQuality);
+                }
+            }
+        } else {
+            Wh_Log(L"MSAA: %dx not supported, falling back to off", g_msaaSamples);
+            g_msaaSamples = 1;
         }
     }
 
@@ -7789,6 +7869,14 @@ static void RenderFrame() {
                 g_pD2DDC->EndDraw();
             }
 
+            // MSAA Resolve：将 MSAA 离屏纹理解析到交换链后台缓冲 / MSAA resolve: resolve MSAA offscreen to swap chain back buffer
+            if (g_msaaSamples > 1 && g_pMSAATexture) {
+                ID3D11Texture2D *pBackBuffer = nullptr;
+                if (SUCCEEDED(g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&pBackBuffer))) {
+                    g_pD3DContext->ResolveSubresource(pBackBuffer, 0, g_pMSAATexture, 0, g_swapChainFormat);
+                    pBackBuffer->Release();
+                }
+            }
             if (g_pSwapChain) {
                 HRESULT presHr = g_pSwapChain->Present(1, 0);
                 if (presHr == DXGI_ERROR_DEVICE_REMOVED || presHr == DXGI_ERROR_DEVICE_RESET) {
@@ -8149,6 +8237,8 @@ static void ReleaseAllRenderResources() {
     if (g_pShadowBrush) { g_pShadowBrush->Release(); g_pShadowBrush = nullptr; }
     if (g_pSolidInnerBrush) { g_pSolidInnerBrush->Release(); g_pSolidInnerBrush = nullptr; }
     if (g_pSolidOuterBrush) { g_pSolidOuterBrush->Release(); g_pSolidOuterBrush = nullptr; }
+    if (g_pMSAARTV) { g_pMSAARTV->Release(); g_pMSAARTV = nullptr; }
+    if (g_pMSAATexture) { g_pMSAATexture->Release(); g_pMSAATexture = nullptr; }
     if (g_pCachedRTV) { g_pCachedRTV->Release(); g_pCachedRTV = nullptr; }
     if (g_pD2DTargetBitmap) { g_pD2DTargetBitmap->Release(); g_pD2DTargetBitmap = nullptr; }
     if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = nullptr; }
