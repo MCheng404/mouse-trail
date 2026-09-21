@@ -2263,6 +2263,7 @@ ID3D11ShaderResourceView *g_pSSAAResolveSRV = nullptr;  // resolve 纹理 SRV / 
 ID3D11VertexShader *g_pBlitVS = nullptr;
 ID3D11PixelShader *g_pBlitPS = nullptr;
 ID3D11Buffer *g_pBlitVB = nullptr;  // 全屏四边形 VB / fullscreen quad VB
+ID3D11InputLayout *g_pBlitLayout = nullptr;  // blit 输入布局 / blit input layout
 ID3D11SamplerState *g_pBlitSampler = nullptr;
 IDCompositionDevice *g_pDCompDevice = nullptr;
 IDCompositionTarget *g_pDCompTarget = nullptr;
@@ -3470,6 +3471,16 @@ static bool InitNativeRendering() {
         if (!CompileShader(g_blitPS, "PSMain", "ps_4_0", &bpsBlob)) break;
         if (FAILED(g_pD3DDevice->CreateVertexShader(bvsBlob->GetBufferPointer(), bvsBlob->GetBufferSize(), nullptr, &g_pBlitVS))) break;
         if (FAILED(g_pD3DDevice->CreatePixelShader(bpsBlob->GetBufferPointer(), bpsBlob->GetBufferSize(), nullptr, &g_pBlitPS))) break;
+
+        // blit 输入布局（POSITION float2 + TEXCOORD0 float2）/ blit input layout (POSITION float2 + TEXCOORD0 float2)
+        {
+            D3D11_INPUT_ELEMENT_DESC blitLayoutDesc[] = {
+                {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+                {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0},
+            };
+            g_pD3DDevice->CreateInputLayout(blitLayoutDesc, 2, bvsBlob->GetBufferPointer(),
+                                            bvsBlob->GetBufferSize(), &g_pBlitLayout);
+        }
         bvsBlob->Release();
         bpsBlob->Release();
 
@@ -3590,6 +3601,7 @@ static bool InitNativeRendering() {
         rastDesc.FillMode = D3D11_FILL_SOLID;
         rastDesc.CullMode = D3D11_CULL_NONE;
         rastDesc.DepthClipEnable = FALSE;
+        rastDesc.MultisampleEnable = TRUE;
         if (FAILED(g_pD3DDevice->CreateRasterizerState(&rastDesc, &g_pRasterState))) break;
 
         // 字符图集采样器（线性过滤，边缘钳制）/ Char atlas sampler (linear filter, clamp)
@@ -8076,7 +8088,7 @@ static void RenderFrame() {
                     g_pD3DContext->RSSetViewports(1, &blitVP);
                     g_pD3DContext->OMSetRenderTargets(1, &pSwapRTV, nullptr);
                     g_pD3DContext->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);  // 不透明覆盖 / opaque overwrite
-                    g_pD3DContext->IASetInputLayout(nullptr);
+                    g_pD3DContext->IASetInputLayout(g_pBlitLayout);
                     g_pD3DContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
                     UINT stride = 16, offset = 0;
                     g_pD3DContext->IASetVertexBuffers(0, 1, &g_pBlitVB, &stride, &offset);
@@ -8474,6 +8486,7 @@ static void ReleaseAllRenderResources() {
     if (g_pSSAATexture) { g_pSSAATexture->Release(); g_pSSAATexture = nullptr; }
     if (g_pBlitSampler) { g_pBlitSampler->Release(); g_pBlitSampler = nullptr; }
     if (g_pBlitVB) { g_pBlitVB->Release(); g_pBlitVB = nullptr; }
+    if (g_pBlitLayout) { g_pBlitLayout->Release(); g_pBlitLayout = nullptr; }
     if (g_pBlitPS) { g_pBlitPS->Release(); g_pBlitPS = nullptr; }
     if (g_pBlitVS) { g_pBlitVS->Release(); g_pBlitVS = nullptr; }
     if (g_pCachedRTV) { g_pCachedRTV->Release(); g_pCachedRTV = nullptr; }
