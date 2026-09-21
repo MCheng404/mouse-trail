@@ -2,7 +2,7 @@
 
 A highly customizable mouse cursor trail mod for [Windhawk](https://windhawk.net/). Built on native D3D11 + DirectComposition hardware acceleration, featuring 23 color modes, 10 trail render styles, 9 particle shapes, a full Newtonian particle physics system (mass, gravity, collisions, electromagnetic forces, turbulence, fluid coupling), centripetal vortex orbital capture, music-reactive audio physics, 2.5D depth effects, click effects, and text/emoji particles. Runs as an isolated Tool Mod process — zero CPU when idle, full hardware acceleration when active.
 
-**[中文文档](https://github.com/MCheng404/mouse-trail#中文文档)**
+**[中文文档](README.zh-CN.md)**
 
 ---
 
@@ -139,78 +139,3 @@ Hex RGB, e.g. `FF0000`=red, `00FF00`=green, `0000FF`=blue, `FFD700`=gold.
 Developed by [MCheng404](https://github.com/MCheng404).
 
 Original overlay/smear architecture inspired by [TheatriChris](https://github.com/TheatriChris)'s cursor-motion-blur mod (MIT licensed).
-
----
-
-<a id="中文文档"></a>
-
-# 中文文档
-
-Windhawk 高度可定制鼠标拖尾特效模组。基于原生 D3D11 + DirectComposition 硬件加速，包含 23 种颜色模式、10 种拖尾渲染风格、9 种粒子形状、完整牛顿粒子物理系统（质量、引力、碰撞、电磁力、湍流、流体耦合）、向心力漩涡轨道捕获、音乐响应音频物理、2.5D 深度效果、点击特效和文字/Emoji 粒子。独立 Tool Mod 进程运行——闲置零 CPU，激活时全硬件加速。
-
-## 渲染架构
-
-- **原生 D3D11 管线：** 自定义 HLSL 顶点/像素着色器，粒子实例化渲染。核心拖尾、粒子、形状渲染不依赖 D2D1。
-- **DirectComposition 硬件覆盖层：** 预乘 alpha DXGI 翻转交换链，per-pixel alpha，与桌面合成器无撕裂合成。
-- **2.5D 深度效果：** 每个粒子带 z 深度 + 透视投影 + 简单光照 + 深度缩放（近大远小近亮远暗）。
-- **双线程设计：** UI 线程跑窗口消息泵，渲染线程独占 D3D11/DComp。鼠标输入永不被渲染阻塞。
-- **HDR 自动检测：** 自动识别 HDR 显示器并使用 R16G16B16A16_FLOAT，SDR 自动回退 BGRA8。
-- **设备丢失恢复：** 主动 `GetDeviceRemovedReason()` 轮询 + `WM_POWERBROADCAST` 唤醒处理。GPU TDR、驱动更新、显卡切换或睡眠唤醒时全自动重建 D3D/DComp 栈——无黑帧。
-- **显示变化处理：** 显示器切换或分辨率变化时自动调整覆盖层。
-- **加法混合发光：** 拖尾、粒子、波纹发光层使用 SrcAlpha+One 加法混合，光晕更通透。
-- **快速移动插值：** 帧间隔 ≤10ms 时沿路径插值补粒子，消除快速移动缝隙。
-
-## 拖尾渲染风格（10种）
-
-- **锥形飘带：** 经典渐隐飘带，带发光、阴影和头部高光
-- **圆点链：** 沿路径排列的圆点，密度和大小可调
-- **函数曲线：** 自定义数学函数变形轨迹（正弦、阻尼、心跳、漩涡或自定义公式）
-- **波浪曲线：** 动态正弦波变形
-- **形状拖尾：** 沿路径生成 9 种可选形状（爱心、五角星、六边形、圆形、菱形、三角形、花朵、五边形、六芒星或随机），带随机速度、旋转、重力，间隔/大小/数量/存活时间可调
-- **双线拖尾：** 两条平行拖尾带
-- **虚线拖尾：** 常量宽度分段虚线
-- **螺旋拖尾：** 沿路径螺旋变形
-- **闪电拖尾：** 细亮锯齿主线 + 35% 概率随机分支
-- **羽毛拖尾：** 细主轴 + 两侧斜向羽枝，自然羽毛弧度
-
-## 颜色模式（23种）
-
-单色 / 流动渐变 / 彩虹流动 / 暖色调流动 / 冷色调流动 / 霓虹脉冲 / 速度变色 / 流动条纹 / 火焰 / 极光 / 光标取色 / 光标混色 / 金属金 / 赛博朋克 / 粉彩 / 色相旋转 / 双色脉冲 / 星光闪烁 / 热力图 / 波纹干涉 / 色谱分裂 / 颗粒抖动 / 渐变扭曲
-
-## 粒子物理系统
-
-模组内置完整牛顿粒子物理引擎，每个力都有独立开关：
-
-- **粒子质量：** 每个粒子有随机质量（Box-Muller 正态分布）。影响惯性、大小、生命周期和加速度（a=F/m）
-- **粒子万有引力：** 牛顿万有引力定律 F=G·m₁·m₂/r² + Plummer 软化。支持双星或 N 体系统（2–10 个主导天体）
-- **向心力漩涡：** 鼠标做曲线运动时粒子被捕获到轨道上。角动量守恒 + 开普勒速度梯度 + 轨道进动 + 3D 轨道倾角
-- **弹性碰撞：** 动量 + 动能守恒，按质量反比位置修正
-- **洛伦兹力：** 带电粒子在磁场中做圆周运动（F=q·v×B）
-- **库仑力：** 同号电荷相斥，异号电荷相吸
-- **布朗运动/湍流：** Perlin-like 空间连贯噪声场，产生流动感湍流
-- **粘性耦合：** 邻近粒子互相拖拽速度，产生流体般的团簇行为
-- **空气阻力：** 低速线性阻力 + 高速二次阻力，质量惯性 + 大小空气阻力
-- **自旋物理：** 粒子自旋带旋转空气阻尼
-- **弹簧（布料）：** 邻近粒子间胡克定律弹簧 + 沿连线阻尼
-- **环境重力/环境风：** 方向恒定加速度 + 阵风/摆动湍流
-- **光标吸引+排斥：** 光标周围力场
-
-## 音乐响应框架
-
-WASAPI 回环捕获 + Cooley-Tukey FFT + 三种节拍检测 + 多频段分析 + BPM 估计 + 音乐物理联动（低频→引力、中频→磁场、高频→热噪声）。
-
-## 安装
-
-1. 安装 [Windhawk](https://windhawk.net/)
-2. 下载 `mouse-trail.wh.cpp`
-3. 在 Windhawk 中点击"创建 mod"→ 粘贴代码 → 保存
-
-## 函数轨迹变量
-
-自定义公式中可使用：`t`（归一化位置 0=头 1=尾）、`d`（距头部像素距离）、`time`（秒）。函数：sin cos exp sqrt abs。运算符：+ - * / ^。
-
-## 作者
-
-开发者 [MCheng404](https://github.com/MCheng404)。
-
-原始覆盖层/拖尾架构灵感来自 [TheatriChris](https://github.com/TheatriChris) 的 cursor-motion-blur mod（MIT 许可证）。
