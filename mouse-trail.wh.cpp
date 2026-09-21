@@ -33,7 +33,7 @@ A highly customizable mouse cursor trail with native D3D11 rendering, 23 color m
 * **2.5D Particle Effects:** Particles have per-instance z-depth with perspective projection and simple lighting. Particles scale with depth (near = larger, far = smaller) for a 3D feel.
 * **DXGI Flip Swap Chain:** Premultiplied alpha for tear-free composition with DirectComposition. HDR auto-detection with R16G16B16A16_FLOAT fallback.
 * **Dual-Thread Design:** UI thread handles window/message pump, render thread handles all D3D11/DComp work — mouse input never blocks.
-* **Device Loss Recovery:** Auto-rebuilds entire D3D/DComp stack on GPU TDR, driver update, or GPU switch.
+* **Device Loss Recovery:** Auto-rebuilds entire D3D/DComp stack on GPU TDR, driver update, GPU switch, or sleep/resume (proactive detection + WM_POWERBROADCAST).
 * **Display Change Handling:** Auto-resizes and repositions overlay on `WM_DISPLAYCHANGE`.
 * **Additive Blend Glow:** Trail/particle/ripple glow layers use SrcAlpha+One additive blending for more translucent halos.
 * **Fast-Move Interpolation:** When interval ≤10ms, particles are interpolated along the path to eliminate gaps during fast movement.
@@ -84,7 +84,10 @@ Off / Complementary (180°) / Analogous (30°) / Triadic (120°) / Split Complem
 * **Particle Mass System:** Each particle has random mass (normal distribution via Box-Muller), affecting inertia, size (∝mass^(1/3)), lifetime, and acceleration (a=F/m)
 * **Particle Gravity:** Newton's law of universal gravitation F=G·m₁·m₂/r² with Plummer softening + Newton's second law a=F/m, supports binary/N-body systems (2-10 bodies)
 * **Centripetal Vortex:** Curved mouse motion captures particles into orbiting tracks with angular momentum conservation, Kepler velocity gradient, orbital precession, and 3D orbital inclination. Particles fly outward when motion stops.
-* **Advanced Physics (optional):** Elastic particle collisions (momentum + energy conservation), Lorentz force (charged particles in magnetic field), Brownian motion (thermal noise), multi-band audio linking
+* **Advanced Physics (optional):** Elastic particle collisions (momentum + energy conservation), Lorentz force (charged particles in magnetic field), Coulomb force (like charges repel, opposite attract), coherent Perlin-like turbulence, viscous coupling between nearby particles, multi-band audio linking
+* **Drag Model:** Linear low-speed drag + quadratic high-speed drag, mass-based inertia (heavy particles retain velocity longer), size-based air resistance (larger particles experience more drag)
+* **Spin Physics:** Particles spin with air damping (rotational drag slows spin over time)
+* **Sleep/Resume Recovery:** Proactive device-lost detection via `GetDeviceRemovedReason()`, plus `WM_POWERBROADCAST` wake handling — GPU resource recreation after sleep/hibernate without black frames
 
 ### Music Reactive Framework (v3.4)
 
@@ -8141,6 +8144,13 @@ static void UpdateVirtualScreenCache() {
     if (g_virtH > 1) g_virtH -= 1;
 }
 static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_POWERBROADCAST && wParam == PBT_APMRESUMEAUTOMATIC) {
+        // 从睡眠/休眠唤醒后，GPU设备状态可能失效，主动触发资源重建
+        // After resume from sleep/hibernate, GPU device state may be invalid, proactively trigger resource recreation
+        Wh_Log(L"OverlayWndProc: wake from sleep, forcing device recovery");
+        g_deviceLost.store(true);
+        return TRUE;
+    }
     if (msg == WM_DISPLAYCHANGE) {
         // 分辨率/显示器变化时更新缓存并调整窗口大小和位置 / Update cache and adjust window size/position on resolution/display change
         UpdateVirtualScreenCache();
@@ -8336,7 +8346,21 @@ DWORD WINAPI RenderThreadProc(LPVOID) {
     Wh_Log(L"RenderThread: entering render loop");
     // ---- 渲染循环（设备丢失恢复 + 空闲退避）----
     DWORD waitMs = 1;
+    int frameCount = 0;
     while (WaitForSingleObject(g_renderExitEvent, waitMs) != WAIT_OBJECT_0) {
+        // 主动检测设备丢失（每120帧检查一次，避免 Present 黑帧）
+        // Proactive device lost check (every 120 frames, avoids black frames before Present fails)
+        if (!g_deviceLost.load() && g_pD3DDevice) {
+            frameCount++;
+            if (frameCount >= 120) {
+                frameCount = 0;
+                HRESULT dr = g_pD3DDevice->GetDeviceRemovedReason();
+                if (dr != S_OK) {
+                    Wh_Log(L"RenderThread: proactive device lost detected (0x%08X)", dr);
+                    g_deviceLost.store(true);
+                }
+            }
+        }
         // 设备丢失恢复 / Device loss recovery
         if (g_deviceLost.exchange(false)) {
             Wh_Log(L"RenderThread: recovering from device loss");
