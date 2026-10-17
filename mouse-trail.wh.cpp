@@ -22,7 +22,7 @@
 // @description:ru-RU След мыши: D3D11 + DirectComposition, 23 цветовых режима, 10 стилей, низкий CPU.
 // @description:pt-BR Rastro do mouse: D3D11 + DirectComposition, 23 modos cor, 10 estilos, baixo CPU.
 // @description:it-IT Scia del mouse: D3D11 + DirectComposition, 23 modalità colore, 10 stili, bassa CPU.
-// @version         3.4.5.3
+// @version         3.4.5.4
 // @author          MCheng404
 // @github          https://github.com/MCheng404
 // @license         MIT
@@ -1085,6 +1085,44 @@ All settings are organized into collapsible sections in the settings dialog. Hov
   $name:ja-JP: 画質とグロー
 
 - Particles:
+  - enable_collision_spark: false
+    $name: Collision Spark
+    $name:zh-CN: 碰撞火花
+    $name:zh-TW: 碰撞火花
+    $name:ja-JP: 衝突スパーク
+    $description: Spawn a brief burst of sparks where particles collide, making the physical
+      impact visible. Sparks are ordinary particles, so drag, gravity and vortices affect them
+      like anything else. Capped per frame, so dense collisions cannot flood the screen.
+    $description:zh-CN: 粒子相撞时在碰撞点迸出一小簇火花，让物理碰撞看得见。火花是普通粒子，
+      同样受阻力、重力与漩涡影响。每帧有生成上限，密集碰撞也不会刷屏。
+    $description:zh-TW: 粒子相撞時在碰撞點迸出一小簇火花，讓物理碰撞看得見。火花是普通粒子，
+      同樣受阻力、重力與漩渦影響。每幀有生成上限，密集碰撞也不會刷屏。
+    $description:ja-JP: 粒子が衝突する衝突点に短い火花を飛ばし、物理的な衝突を可視化します。
+      火花は通常の粒子なので、空気抵抗・重力・渦の影響もそのまま受けます。毎フレーム上限あり。
+  - spark_chance: 40
+    $name: Spark Chance
+    $name:zh-CN: 火花概率
+    $name:zh-TW: 火花機率
+    $name:ja-JP: 火花確率
+    $description: Percentage chance that a collision produces sparks. Raise it for a busy, sparkly
+      look; lower it for occasional accents. 0 disables sparks even with Collision Spark on.
+    $description:zh-CN: 每次碰撞产生火花的概率。调高会显得热闹闪烁，调低则只是偶尔点缀。
+      设为 0 时即使开启碰撞火花也不会出现。
+    $description:zh-TW: 每次碰撞產生火花的機率。調高會顯得熱鬧閃爍，調低則只是偶爾點綴。
+      設為 0 時即使開啟碰撞火花也不會出現。
+    $description:ja-JP: 衝突のたびに火花が出る確率。上げると賑やかに、下げると時折アクセントに。
+      0 にすると衝突スパークを有効にしても出ません。
+  - spark_intensity: 100
+    $name: Spark Intensity
+    $name:zh-CN: 火花强度
+    $name:zh-TW: 火花強度
+    $name:ja-JP: 火花強度
+    $description: How many sparks a single collision produces and how fast they fly. 100 is the
+      baseline; 0 means collisions are silent even with Collision Spark enabled.
+    $description:zh-CN: 单次碰撞产生多少火花、以及飞得多快。100 为基准；设为 0 时即使开启碰撞火花也无声无息。
+    $description:zh-TW: 單次碰撞產生多少火花、以及飛得多快。100 為基準；設為 0 時即使開啟碰撞火花也無聲無息。
+    $description:ja-JP: 1 回の衝突で何個の火花が飛び、どの速さで飛ぶか。100 が基準。0 にすると
+      衝突スパークを有効にしても何も起きません。
   - particle_mode: always
     $name: Particle Mode
     $name:zh-CN: 粒子模式
@@ -2724,6 +2762,14 @@ All settings are organized into collapsible sections in the settings dialog. Hov
 
 #define GRAD_STOPS 12
 
+// ===================== 帧率无关化（dt 改造）=====================
+// 物理量原先全部按 60Hz 的"每帧"标定：144Hz 下同样一秒施加 2.4 倍的力、阻尼几乎失效；
+// 关掉帧同步（~1000fps）更离谱。g_dtScale = 真实帧间隔 / 16.67ms，各处按它换算。
+// Physics was calibrated per-frame at 60Hz: at 144Hz the same second applies 2.4x the force and
+// drag barely bites. g_dtScale converts every per-frame quantity to a refresh-rate independent one.
+static float g_dtScale = 1.0f;
+static DWORD g_lastPhysicsTime = 0;
+
 // ===================== 颜色工具 =====================
 // 数值约定 / Numeric conventions: 通道均为 0~1 浮点，alpha 恒为 1（拖尾画刷基色不透明）。
 constexpr int kGradLUTSize = 256;  // 渐变查找表条目数
@@ -3460,7 +3506,30 @@ ID2D1Mesh *g_pOuterMesh = nullptr;
 ID2D1Mesh *g_pInnerMesh = nullptr;
 
 int g_cachedVW = 0, g_cachedVH = 0;
-int g_virtX = 0, g_virtY = 0, g_virtW = 0, g_virtH = 0;  // 虚拟屏幕尺寸缓存，WM_DISPLAYCHANGE 时更新
+// 虚拟屏幕尺寸缓存，WM_DISPLAYCHANGE 时更新。四个值必须【同批】对渲染线程生效：
+// 混批会得到"新宽 + 旧高"，那一帧的渲染矩阵就不对。用 seqlock 保证（奇数 = 正在写入）。
+// The four values must reach the render thread as one batch; a mix would pair a new width with a
+// stale height and skew that frame's transform. Seqlock: odd counter = a write is in flight.
+// 写侧用 release 发布，读侧用 acquire 读，避免编译器/CPU 把跨线程的读写重排。
+// 【不保证四值同批】：最坏情况读到"新宽 + 旧高"，那一帧的渲染矩阵会偏一下。
+// 这是在"正确性"与"不卡顿"之间的取舍 —— seqlock 版本（序号 + atomic_thread_fence + 重试）
+// 实测会让整帧卡顿，因为 fence 编译成 mfence 全内存屏障。
+// Release/acquire publication. Does NOT guarantee the four values arrive as one batch; the worst
+// case is a new width paired with a stale height for one frame. The seqlock version (counter +
+// atomic_thread_fence + retry) stuttered whole frames because the fence lowers to a full mfence.
+int g_virtX = 0, g_virtY = 0, g_virtW = 0, g_virtH = 0;
+static inline void PublishVirtualScreen(int x, int y, int w, int h) {
+    std::atomic_ref<int>(g_virtX).store(x, std::memory_order_release);
+    std::atomic_ref<int>(g_virtY).store(y, std::memory_order_release);
+    std::atomic_ref<int>(g_virtW).store(w, std::memory_order_release);
+    std::atomic_ref<int>(g_virtH).store(h, std::memory_order_release);
+}
+static inline void LoadVirtualScreen(int &x, int &y, int &w, int &h) {
+    x = std::atomic_ref<int>(g_virtX).load(std::memory_order_acquire);
+    y = std::atomic_ref<int>(g_virtY).load(std::memory_order_acquire);
+    w = std::atomic_ref<int>(g_virtW).load(std::memory_order_acquire);
+    h = std::atomic_ref<int>(g_virtH).load(std::memory_order_acquire);
+}
 
 // ===================== 设置缓存 =====================
 float g_triggerVelocity = 25.0f, g_stopVelocity = 10.0f;
@@ -3577,7 +3646,6 @@ struct MusicState {
     std::vector<float> fftWorkImag;    // FFT工作缓冲（虚部，复用避免每帧分配）
     int fftWritePos = 0;               // 环形缓冲写入位置
     // 节拍检测
-    float beatEnergy = 0;  // 当前帧能量
     float beatAvgEnergy = 0;           // 平均能量（历史）/ Average energy (history)
     float beatThreshold = 0;  // 节拍阈值
     bool beatDetected = false;  // 当前帧是否检测到节拍
@@ -3587,16 +3655,12 @@ struct MusicState {
     std::deque<DWORD> beatHistory;  // 节拍时间历史
     // 频谱通量检测
     std::vector<float> prevSpectrum;   // 上一帧频谱
-    float spectralFlux = 0;            // 当前频谱通量
     float avgSpectralFlux = 0;         // 平均频谱通量
     // 多频段节拍
-    float bassBeatEnergy = 0;          // 低频节拍能量
     float bassBeatAvg = 0;             // 低频平均能量
     bool bassBeat = false;             // 低频节拍
-    float midBeatEnergy = 0;           // 中频节拍能量
     float midBeatAvg = 0;              // 中频平均能量
     bool midBeat = false;              // 中频节拍
-    float trebleBeatEnergy = 0;        // 高频节拍能量
     float trebleBeatAvg = 0;           // 高频平均能量
     bool trebleBeat = false;           // 高频节拍
     // 频段数据（低/中/高）/ Frequency band data (bass/mid/treble)
@@ -3731,6 +3795,13 @@ int g_missileExplodeFx = 2;  // 0=仅粒子 1=仅冲击波 2=两者
 bool g_fxBloomPulse = false;  // 泛光呼吸
 bool g_fxGlowBreath = false;  // 外发光呼吸
 bool g_fxEdgeFlow = false;  // 边缘柔和度流动
+// 碰撞火花 / collision sparks
+bool g_enableCollisionSpark = false;   // 碰撞时是否生成火花 / spawn sparks on collision
+int g_sparkChance = 40;                // 每次碰撞触发火花的概率（%）/ chance per collision (%)
+int g_sparkIntensity = 100;            // 火花强度（%，100 = 基准）/ spark intensity (%, 100 = baseline)
+// 每帧生成预算：碰撞是每帧最多 25 万次迭代的热路径，绝不能无限制地生成粒子
+static int g_sparkBudget = 0;
+
 bool g_fxDitherShimmer = false;  // 颗粒抖动闪烁
 bool g_fxStrokeFlow = false;  // 描边宽度流动
 bool g_fxBloomThrWave = false;  // 泛光阈值波动
@@ -3878,6 +3949,52 @@ struct Particle {
     float debugForceX, debugForceY; // 调试用：本帧总受力（物理可视化）
 };
 std::vector<Particle> g_particles;
+static inline int GetParticleCap();   // 供火花函数做容量判断 / used by the spark spawner
+
+// ===================== 碰撞火花 =====================
+// 碰撞本身只改速度，没有任何视觉反馈，玩家看不到"撞到了"。这里在碰撞点撒一小簇
+// 短寿命粒子，把物理事件变成可见的瞬间。
+// 火花是普通粒子：会被阻力/引力/漩涡正常影响，不需要额外物理，也因此天然帧率无关。
+// 每帧预算（g_sparkBudget）由调用方每帧重置 —— 没有它，热路径上能刷出上万个粒子。
+static void SpawnCollisionSpark(float cx, float cy, float nx, float ny, float approachSpeed) {
+    if (g_sparkBudget <= 0) return;
+    // 【不挤占正常粒子的槽位】粒子总数是全局共享的上限（500 / 超级性能 1200）。火花若能一直
+    // 顶到上限，trim 就会把用户正常的拖尾粒子当成"最老"删掉，而火花每帧继续补充 ——
+    // 表现为一团球状的东西一直挂在屏幕上。留 15% 余量给正常粒子即可根除。
+    // Sparks share the GLOBAL particle budget with ordinary trail particles. If they can always
+    // fill it, trim starts deleting the user's real trail particles (it removes the oldest) while
+    // sparks keep being replenished - a blob that never goes away. Reserve 15% for real particles.
+    if ((int)g_particles.size() > GetParticleCap() * 85 / 100) return;
+    int want = 1 + (int)((approachSpeed * 0.03f) * (g_sparkIntensity / 100.0f));
+    if (want < 1) want = 1;
+    if (want > 3) want = 3;                 // 单次碰撞最多 3 颗
+    for (int k = 0; k < want; k++) {
+        if (g_sparkBudget <= 0) break;
+        g_sparkBudget--;
+        Particle p = {};
+        // 沿碰撞法线方向散开，加一点随机偏角让簇看起来是"炸开"而不是"射出一条线"
+        float base = atan2f(ny, nx);
+        float ang = base + (((float)rand() / RAND_MAX) - 0.5f) * 1.9f;
+        float sp = (1.1f + approachSpeed * 0.030f) * (0.55f + 0.45f * ((float)rand() / RAND_MAX));
+        p.x = cx; p.y = cy;
+        p.vx = cosf(ang) * sp;
+        p.vy = sinf(ang) * sp;
+        p.size = 0.45f + ((float)rand() / RAND_MAX) * 0.5f;   // 比普通粒子明显小，才读得出"火花"
+        p.z = 0.5f;
+        p.mass = 1.0f;
+        p.charge = 0.0f;                    // 火花不带电，免得被洛伦兹力甩飞
+        p.rotation = 0.0f;
+        p.spinSpeed = 0.0f;
+        p.startTime = GetTickCount();
+        p.lifetime = 110 + rand() % 130;   // 110~240ms：短促一闪，不堆积
+        // 亮白偏暖 -> 橙红暗收，读起来像火星
+        p.color = D2D1::ColorF(1.0f, 0.92f, 0.72f, 1.0f);
+        p.endColor = D2D1::ColorF(0.85f, 0.28f, 0.06f, 1.0f);
+        p.shapeType = 0;                    // circle
+        g_particles.push_back(p);
+    }
+}
+
 struct Ripple {
     POINT pos;
     DWORD startTime;
@@ -3915,14 +4032,24 @@ static void SetGradStopPair(GradData &out, int i, float ratio, D2D1_COLOR_F co, 
     out.inner[i] = {ratio, D2D1::ColorF(ci.r, ci.g, ci.b, alpha)};
 }
 
-// P1-3（读侧）helper：g_cursorExtractedColor 由后台取色线程异步发布（写侧可能已改为双缓冲 + 原子索引，或仍为普通变量）。
-// 这里整块 memcpy 出一个本地快照，保证同一次配色里用到的 r/g/b/a 四个分量来自同一批发布结果，
-// 避免读到「一半旧一半新」的撕裂颜色。用 memcpy 而非字段赋值，是为了同时兼容写侧的普通 / volatile / atomic 三种类型声明。
+// 读侧快照：逐分量 atomic load。
+// 原先是 memcpy 16 字节 —— memcpy 绕过 atomic_ref，属于非原子读（UB），必须改掉。
+// 这里【不做】重试：seqlock 那版带 atomic_thread_fence（编译成 mfence 全内存屏障）且在序号为奇数时
+// 立即重试，实测造成整帧卡顿。改为接受"可能读到跨批混合的颜色"：每个分量都是完整值，
+// 最坏是一帧内颜色略有偏差，不会有撕裂值，也不再有 UB。
+// Reader: per-component atomic loads. memcpy bypassed atomic_ref (a non-atomic read = UB).
+// Deliberately no retry loop: the seqlock version used atomic_thread_fence (a full mfence) plus an
+// immediate no-backoff retry, which measurably stuttered whole frames. Per-component loads may still
+// straddle a publish, but every component is a whole value - no tearing, no UB.
 static D2D1_COLOR_F SnapshotCursorExtractedColor() {
     D2D1_COLOR_F snap;
-    memcpy(&snap, (const void*)&g_cursorExtractedColor, sizeof(snap));  // 整块取值
+    snap.r = std::atomic_ref<float>(g_cursorExtractedColor.r).load(std::memory_order_acquire);
+    snap.g = std::atomic_ref<float>(g_cursorExtractedColor.g).load(std::memory_order_acquire);
+    snap.b = std::atomic_ref<float>(g_cursorExtractedColor.b).load(std::memory_order_acquire);
+    snap.a = std::atomic_ref<float>(g_cursorExtractedColor.a).load(std::memory_order_acquire);
     return snap;
 }
+
 
 static void ComputeColors(int mode, DWORD time, float velocity, GradData &out) {
     float t = time / 1000.0f;
@@ -5393,7 +5520,13 @@ ID2D1Bitmap1* g_pCharAtlasBmp = nullptr;  // 绑定在该表面上的 D2D 位图
 
 // ---- 常量与缓存（性能优化用）/ Constants & caches (for optimization) ----
 // 拖尾带顶点缓冲容量，必须与 g_pTrailVB 的创建大小保持一致
-static const int kMaxTrailVertices = 4096;
+// 16384 是算出来的，不是拍的：tail_length=200 时贝塞尔平滑后路径约 797 点，单层 1594 顶点，
+// 锥形带最多 7 层（阴影+柔边+发光×3+主体+高亮）共 11158。原值 4096 会让前置层挤掉主体带，
+// 表现为"开了发光/阴影后拖尾反而看不见"。
+// Sized from the worst case: ~797 path points at tail_length=200 -> 1594 verts per layer, up to 7
+// layers = 11158. The old 4096 let the earlier layers crowd out the MAIN band, so enabling glow or
+// shadow made the trail disappear.
+static const int kMaxTrailVertices = 16384;
 
 // ===================== 常量缓冲布局镜像 / constant-buffer layout mirror =====================
 // 这是 HLSL 侧 MT_HLSL_CONSTANT_BUFFER 的 C++ 孪生结构体。
@@ -5833,6 +5966,14 @@ static void BuildCharAtlas() {
 
     // 图集布局：16列，行数按格子数算
     int phraseCount = (int)g_atlasChars.size();
+    // 没有格子可用（文本为空/全被过滤）时提前退出：下面要拿 g_charAtlasCols 当除数，
+    // 而 phraseCount==0 会把它压成 0 → 除以 0 直接终止进程。
+    if (phraseCount <= 0) {
+        g_charAtlasCols = 0;
+        g_charAtlasRows = 0;
+        g_charAtlasDirty = false;
+        return;
+    }
     g_charAtlasCols = 16;
     // 格子少时减少列数，避免图集过宽
     if (phraseCount < g_charAtlasCols) g_charAtlasCols = phraseCount;
@@ -5886,7 +6027,13 @@ static void BuildCharAtlas() {
     // 绑定 D2D 绘制目标。这一对 surface/bitmap **缓存下来**，供 [tag] 动态刷新复用：
     // 每秒重建一次走完 QueryInterface + CreateBitmapFromDxgiSurface 足以造成周期性掉帧。
     if (FAILED(g_pCharAtlasTex->QueryInterface(__uuidof(IDXGISurface), (void**)&g_pCharAtlasSurface))) {
-        Wh_Log(L"[CharAtlas] QueryInterface(IDXGISurface) FAILED"); return;
+        // 失败时必须连 SRV 一起释放：渲染侧只判 g_pCharAtlasSRV 非空，SRV 残留会让人去
+        // 采样尚未写入的显存（D3D11 的 CreateTexture2D 不清零）→ 显示乱码。
+        // Release the SRV too: the render side only tests the SRV, and a stale one samples
+        // never-written memory (CreateTexture2D does not zero) showing garbage.
+        if (g_pCharAtlasSRV) { g_pCharAtlasSRV->Release(); g_pCharAtlasSRV = nullptr; }
+        Wh_Log(L"[CharAtlas] QueryInterface(IDXGISurface) FAILED");
+        return;
     }
     D2D1_BITMAP_PROPERTIES1 bmpProps = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET,
@@ -5894,6 +6041,8 @@ static void BuildCharAtlas() {
     if (FAILED(g_pD2DDC->CreateBitmapFromDxgiSurface(g_pCharAtlasSurface, &bmpProps, &g_pCharAtlasBmp))) {
         Wh_Log(L"[CharAtlas] CreateBitmapFromDxgiSurface FAILED");
         ReleaseCharAtlasTarget();
+        // 同上：SRV 残留会让渲染侧采样未初始化的显存
+        if (g_pCharAtlasSRV) { g_pCharAtlasSRV->Release(); g_pCharAtlasSRV = nullptr; }
         return;
     }
     RedrawCharAtlas();
@@ -6669,13 +6818,22 @@ static void NativeRenderParticles(int screenW, int screenH) {
 
     // 3D深度排序：z大的（后面）先渲染，z小的（前面）后渲染覆盖，实现前后遮挡
     // 仅在漩涡活跃时排序，避免普通模式下的性能开销
+    //
+    // 【必须排序索引而不是容器本身】：粒子 trim（UpdateParticles 里的 erase(begin,...)）
+    // 依赖「队首 = 最老粒子」这个不变量：新粒子 push_back 到队尾，超限就删队首。
+    // 原地 sort 会把 z 最大的排到队首，于是 trim 删掉的就不是最老的那些。
+    // 排序发生在渲染阶段、trim 在下一帧的更新阶段，所以这个错位会真实发生。
     bool anyVortexActive = false;
     for (int i = 0; i < g_vortexMaxCount; i++) {
         if (g_vortices[i].active && g_vortices[i].strength > 0.1f) { anyVortexActive = true; break; }
     }
-    if (anyVortexActive && g_particles.size() < 800) {
-        std::sort(g_particles.begin(), g_particles.end(), [](const Particle &a, const Particle &b) {
-            return a.z > b.z;
+    bool depthSorted = anyVortexActive && g_particles.size() < 800;
+    static std::vector<int> s_drawOrder;      // 渲染顺序（存下标，不存指针：容器可能被 trim 移动）
+    if (depthSorted) {
+        s_drawOrder.resize(g_particles.size());
+        for (size_t i = 0; i < g_particles.size(); i++) s_drawOrder[i] = (int)i;
+        std::sort(s_drawOrder.begin(), s_drawOrder.end(), [](int ia, int ib) {
+            return g_particles[ia].z > g_particles[ib].z;   // 降序：大 z 先画
         });
     }
 
@@ -6697,7 +6855,10 @@ static void NativeRenderParticles(int screenW, int screenH) {
     float sizeMul = g_particleSizeMultiplier / 100.0f;  // 预计算
     // 循环不变量外提：音乐低频增益每帧只算一次
     const float musicSizeBoost = g_enableMusicPhysics ? (1.0f + g_musicBassSizeBoost * 0.5f) : 1.0f;
-    for (auto &p : g_particles) {
+    // 遍历顺序 = 深度排序结果（未启用排序时就是容器的自然顺序）
+    const size_t nDraw = g_particles.size();
+    for (size_t di = 0; di < nDraw; di++) {
+        Particle &p = g_particles[depthSorted ? (size_t)s_drawOrder[di] : di];
         float progress = (float)(now - p.startTime) / p.lifetime;
         if (progress < 0 || progress >= 1) continue;
         float lifeAlpha = (1.0f - progress);
@@ -7237,7 +7398,7 @@ static void SetNativeRenderState(int screenW, int screenH, D3D11_PRIMITIVE_TOPOL
     g_pD3DContext->IASetPrimitiveTopology(topology);
 }
 
-// ===================== 渲染抽象层 v3.4.5.3（MtDraw）=====================
+// ===================== 渲染抽象层 v3.4.5.4（MtDraw）=====================
 // 同一视觉效果过去要在 D3D11 与 D2D 两套代码里各写一遍（NativeRenderXxx
 // 反复出现"只改了一条路径"（点击风格、形状动画都栽过）。这里借鉴 Dear ImGui 的 DrawList：
 // 上层只描述"要画什么"、不碰 GPU，由后端决定"怎么画"。图元用语义级而非裸三角形
@@ -7285,11 +7446,29 @@ static const GradData *g_mtGrad = nullptr;
 
 // 条带上第 i 个点的半宽。两个后端共用同一份公式 —— 先前各写一遍，改一处漏一处就会让
 // D3D 与 D2D 的锥形宽度对不上。
+// 锥形因子 (1-ratio)^1.3 查表。原来每层每顶点都要算一次 powf：一次 DrawTrailBand 是
+// 7 层 × 797 点 = 5579 次，一帧最多调用 6 次 = 33474 次，而不同的 ratio 只有 797 个。
+// Taper factor (1-ratio)^1.3 via LUT. Per-vertex powf cost 5579 evaluations per DrawTrailBand
+// (7 layers x 797 points), up to 6 calls a frame = 33474, while only 797 distinct ratios exist.
+static float MtTaperFactor(float ratio) {
+    static float lut[257];
+    static bool inited = false;
+    if (!inited) {
+        for (int i = 0; i <= 256; i++) lut[i] = powf(1.0f - (float)i / 256.0f, 1.3f);
+        inited = true;
+    }
+    float t = ratio * 256.0f;
+    if (t < 0.0f) return lut[0];
+    if (t >= 256.0f) return lut[256];
+    int i = (int)t;
+    float frac = t - (float)i;
+    return lut[i] + (lut[i + 1] - lut[i]) * frac;
+}
 static inline float MtStripHalfW(const MtDraw &d, int i) {
     if (!d.tapered) return d.constWidth * 0.5f;
     if (i >= d.pathCount - 1) return 0.5f * d.widthScale;
     float ratio = (float)i / (float)(d.pathCount - 1);
-    return 10.0f * powf(1.0f - ratio, 1.3f) * d.widthMul * d.widthScale;
+    return 10.0f * MtTaperFactor(ratio) * d.widthMul * d.widthScale;
 }
 
 // ---- D3D11 后端：图元 -> 三角形 -> 顶点缓冲，最后一次性提交 ----
@@ -7297,6 +7476,7 @@ namespace mtb {
     struct Layer { int offset, count; bool additive; D3D11_PRIMITIVE_TOPOLOGY topo; };
     static std::vector<VertexPosColor> s_verts;
     static std::vector<Layer> s_layers;
+    static const size_t kGeometryCacheLimit = 512;  // 有界缓存上限：防止几何对象无限累积 / cap to stop unbounded geometry growth
     static std::unordered_map<int, ID2D1PathGeometry *> s_keyCache;
 
     static void D3DBegin() {
@@ -7304,6 +7484,23 @@ namespace mtb {
         s_layers.clear();
     }
     static void D3DDraw(const MtDraw &d) {
+        // 容量闸门：缓冲满时必须【整个图元】跳过，不能写一半。
+        // 写一半会让 s_layers 记下一个不完整的层；D3DEnd 截断 s_verts 之后，该层的
+        // offset+count 就会指向已被截掉的部分，Draw 时越界读顶点缓冲（P0）。
+        // 最坏情况：形状拖尾 shapeCap=400 × 心形 72 顶点 ≈ 23 万，远超 kMaxTrailVertices。
+        // Gate the whole primitive: writing a partial one leaves a layer whose offset+count points
+        // past the truncated vertex buffer, so Draw reads out of bounds.
+        {
+            int need = 0;
+            switch (d.kind) {
+            case MtPrim::Poly:  need = (d.vertCount > 2) ? (d.vertCount - 2) * 3 : 0; break;
+            case MtPrim::Ring:  need = 25 * 2; break;
+            case MtPrim::Disc:  need = 24 * 3; break;
+            case MtPrim::Spoke: need = 4; break;
+            case MtPrim::Strip: need = d.pathCount * 2; break;
+            }
+            if (need <= 0 || need > kMaxTrailVertices - (int)s_verts.size()) return;
+        }
         int start = (int)s_verts.size();
         float cs = cosf(d.rot), sn = sinf(d.rot);
         // 本地坐标 -> 世界坐标（缩放 + 旋转 + 平移）
@@ -7367,8 +7564,9 @@ namespace mtb {
             for (int i = 0; i < pc; i++) {
                 float ratio = (float)i * inv;
                 float ow = MtStripHalfW(d, i);
-                float px = d.path[i * 2] + d.offX, py = d.path[i * 2 + 1] + d.offY;
                 float nx = d.nrm[i * 2], ny = d.nrm[i * 2 + 1];
+                float px = d.path[i * 2] + d.offX;
+                float py = d.path[i * 2 + 1] + d.offY;
                 float a = d.a;
                 if (d.headOnly)  // 头部高亮：只在头部一段显示
                     a *= (ratio < 0.25f) ? 0.0f : ((ratio > 0.85f) ? 1.0f : (ratio - 0.25f) / 0.6f);
@@ -7383,7 +7581,25 @@ namespace mtb {
             D3D11_PRIMITIVE_TOPOLOGY topo = (d.kind == MtPrim::Poly || d.kind == MtPrim::Disc)
                 ? D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST
                 : D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
-            s_layers.push_back({start, n, d.additive, topo});
+            // 只有 TRIANGLELIST 能安全合并：它的三角形彼此独立（每 3 个顶点一组）。
+            // TRIANGLESTRIP 绝不能合并两个独立条带 —— 合并后它们会连成一个长条带，
+            // 接缝处由"前一串的末顶点 + 后一串的首顶点"拼出错误的三角形。
+            // （要合并 STRIP 得插入退化三角形或改用索引缓冲 + 重启值，这里不做。）
+            // Only TRIANGLELIST merges safely: its triangles are independent groups of 3.
+            // TRIANGLESTRIP must never merge two separate strips - they would join into one long
+            // strip and the seam would fabricate triangles from the last vertex of one strip and
+            // the first of the next. (Merging strips needs degenerate triangles or an index buffer
+            // with a restart value; not done here.)
+            bool mergeable = (topo == D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            if (mergeable
+                && !s_layers.empty()
+                && s_layers.back().topo == topo
+                && s_layers.back().additive == d.additive
+                && s_layers.back().offset + s_layers.back().count == start) {
+                s_layers.back().count += n;
+            } else {
+                s_layers.push_back({start, n, d.additive, topo});
+            }
         }
     }
     static void D3DEnd(int screenW, int screenH, const GradData *grad = nullptr) {
@@ -7432,6 +7648,19 @@ namespace mtb {
         // keyCache is now in mtb namespace scope (see below)
         auto it = s_keyCache.find(cacheKey);
         if (it != s_keyCache.end()) return it->second;
+        // 有界缓存：墨晕动画的 key 随 progress 变化，每帧会新增键；若放任不管，
+        // 运行越久缓存越大（每次点击最多累积 128 个几何对象且永不释放），
+        // unordered_map 还会因不断 rehash 造成间歇卡顿。
+        // 这里在插入新键前检查上限，超限先整批释放旧几何再继续 —— 命中概率高、
+        // 重建代价小（每个墨晕环只有 28 段）。
+        // Bounded cache: ink-bloom keys change with progress every frame; without a cap the map
+        // grows forever (up to ~128 leaked geometries per click) and rehashes cause hitches.
+        // Evict the whole old set before inserting when over the limit - hit rate stays high and
+        // rebuilding a 28-segment ring is cheap.
+        if (s_keyCache.size() >= kGeometryCacheLimit) {
+            for (auto &kv : s_keyCache) { if (kv.second) kv.second->Release(); }
+            s_keyCache.clear();
+        }
         ID2D1PathGeometry *g = BuildPolyGeom(verts, count);
         if (g) s_keyCache[cacheKey] = g;
         return g;
@@ -7499,13 +7728,17 @@ namespace mtb {
                 outline.reserve((size_t)(i1 - i0 + 1) * 2);
                 for (int i = i0; i <= i1; i++) {
                     float ow = halfW(i);
-                    outline.push_back(D2D1::Point2F(d.path[i * 2] + d.offX + d.nrm[i * 2] * ow,
-                                                    d.path[i * 2 + 1] + d.offY + d.nrm[i * 2 + 1] * ow));
+                    outline.push_back(D2D1::Point2F(d.path[i * 2] + d.offX
+                                                    + d.nrm[i * 2] * ow,
+                                                    d.path[i * 2 + 1] + d.offY
+                                                    + d.nrm[i * 2 + 1] * ow));
                 }
                 for (int i = i1; i >= i0; i--) {
                     float ow = halfW(i);
-                    outline.push_back(D2D1::Point2F(d.path[i * 2] + d.offX - d.nrm[i * 2] * ow,
-                                                    d.path[i * 2 + 1] + d.offY - d.nrm[i * 2 + 1] * ow));
+                    outline.push_back(D2D1::Point2F(d.path[i * 2] + d.offX
+                                                    - d.nrm[i * 2] * ow,
+                                                    d.path[i * 2 + 1] + d.offY
+                                                    - d.nrm[i * 2 + 1] * ow));
                 }
                 if (outline.size() < 3) return;
                 ID2D1PathGeometry *geom = nullptr;
@@ -7570,7 +7803,7 @@ static inline void MtEnd(int screenW, int screenH) {
     g_mtGrad = nullptr;
 }
 
-// ===================== 形状拖尾（抽象层统一实现 v3.4.5.3）=====================
+// ===================== 形状拖尾（抽象层统一实现 v3.4.5.4）=====================
 // 过去 D3D 一份、D2D 一份，部件着色和动画要写两遍 —— D2D 那份还漏过部件级拉伸，
 // 导致点火尾焰、摇曳、光纤自适应拉长只在原生路径生效。现在只有这一份。
 static void DrawTrailShapes(int screenW, int screenH, DWORD dwTime) {
@@ -7648,7 +7881,7 @@ static void DrawTrailShapes(int screenW, int screenH, DWORD dwTime) {
     MtEnd(screenW, screenH);
 }
 
-// ===================== 锥形拖尾带（抽象层统一实现 v3.4.5.3）=====================
+// ===================== 锥形拖尾带（抽象层统一实现 v3.4.5.4）=====================
 // 层次与原生 NativeRenderTrail 一一对应：阴影 → 自适应边缘 → 外发光×3 → 主体 → 头部高亮。
 // 渐变由 MtBegin 传入（D3D 走 PS 的 u 采样，D2D 按 ratio 分 8 段近似）。
 // 意义：D2D 回退路径原本根本没有拖尾带（原生渲染失败时拖尾直接消失），现已补齐。
@@ -7671,7 +7904,6 @@ static void DrawTrailBand(const std::vector<D2D1_POINT_2F> &smoothed,
         s_nrm.push_back(-ddy);
         s_nrm.push_back(ddx);
     }
-    D2D1_COLOR_F c = cols.outer[0].color;
 
     MtDraw d;
     d.kind = MtPrim::Strip;
@@ -7727,6 +7959,7 @@ static void DrawTrailBand(const std::vector<D2D1_POINT_2F> &smoothed,
     d.r = d.g = d.b = 1.0f;
     d.a = fadeAlpha;
     d.additive = false;
+    d.headOnly = false;
     MtPrimDraw(d);
     // 5. 头部高亮（只在头部一段）/ head highlight (head only)
     if (g_enableHeadHighlight) {
@@ -7740,7 +7973,7 @@ static void DrawTrailBand(const std::vector<D2D1_POINT_2F> &smoothed,
 }
 
 // 波纹原生渲染
-// ===================== 点击效果（抽象层统一实现 v3.4.5.3）=====================
+// ===================== 点击效果（抽象层统一实现 v3.4.5.4）=====================
 // 过去 D3D 与 D2D 各有一份实现，
 // 点击风格就栽在"只改了 D2D 那一份、默认生效的原生路径没改"，用户切换毫无反应。
 // 现在只有这一份，两个后端由抽象层分发，观感天然一致。
@@ -7774,11 +8007,15 @@ static void DrawClickEffects(int screenW, int screenH, DWORD dwTime, const GradD
     // 墨晕的顶点同时取决于 progress（相位）与 radius（尺寸），两者都要量化进缓存键，
     // 否则要么画错、要么每帧重建 geometry。
     auto InkKey = [&](float progress, float radius) -> int {
-        int qp = (int)(progress * 64.0f);
-        if (qp > 63) qp = 63;
+        // 量化到 24 步 / 128 桶：动画仍平滑，但几何缓存组合从 ~12800 降到 ~3072，
+        // 配合上面的有界缓存把驻留控制在 512 个以内。
+        // Quantized to 24 steps x 128 buckets: animation stays smooth while the key space drops
+        // from ~12800 to ~3072, and the bounded cache keeps residency <= 512.
+        int qp = (int)(progress * 24.0f);
+        if (qp > 23) qp = 23;
         int qr = (int)(radius * 0.25f);
-        if (qr > 199) qr = 199;
-        return qp * 200 + qr;
+        if (qr > 127) qr = 127;
+        return qp * 128 + qr;
     };
     auto polyEllipse = [&](float rx, float ry, int seg) -> int {
         s_poly.clear();
@@ -7906,7 +8143,7 @@ static void DrawClickEffects(int screenW, int screenH, DWORD dwTime, const GradD
                 d.verts = s_poly.data();
                 // 花瓣尺寸只随 radius 变，把它量化进缓存键即可命中缓存
                 int qr = (int)(radius * 0.25f);
-                if (qr > 199) qr = 199;
+                if (qr > 127) qr = 127;
                 d.cacheKey = 300000 + qr;
                 MtPrimDraw(d);
             }
@@ -8354,7 +8591,15 @@ static bool NativeRenderFrame(int screenW, int screenH, const std::vector<D2D1_P
     static std::vector<float> s_bnx, s_bny;
 
     // 图集脏标记重建（在任何状态绑定前）/ Rebuild atlas on dirty flag (before any state binding)
-    if (g_charAtlasDirty && g_particleShape == 10) { BuildCharAtlas(); g_charAtlasDirty = false; }
+    // exchange 而非"重建完再 store(false)"：BuildCharAtlas 执行期间 UI 线程可能又置了位
+    // （换 DPI 显示器、改文字设置），无条件清会把那次置位吞掉 → 图集按旧参数重建且不再重来，
+    // 表现为跨显示器后字号长期错误。先清标志再建，若期间有新置位则保持 dirty 触发下一帧重建。
+    // exchange, not an unconditional store(false): if the UI thread sets the flag WHILE the atlas
+    // is being built, a blind clear swallows it, leaving a stale atlas that never rebuilds.
+    if (g_charAtlasDirty && g_particleShape == 10) {
+        g_charAtlasDirty.exchange(false);
+        BuildCharAtlas();
+    }
     // [tag] 动态跟随：内部做了 250ms 节流，且值没变时直接返回，稳态开销可忽略。
     // 必须排在 BuildCharAtlas 之后——否则刚重建完的 g_lastExpandedPhrases 会被判定为"没变"，
     // 但反过来若这里触发了 NeedRebuild，下一帧的 dirty 分支不会再跑，所以 UpdateCharAtlasTags
@@ -9101,7 +9346,6 @@ static void MusicUpdate(DWORD dwTime) {
     float bassGate = 1.08f + g_musicSensitivity * 0.50f;
 
     // 方式1：总能量阈值法
-    m->beatEnergy = totalEnergy;
     m->beatAvgEnergy = m->beatAvgEnergy * 0.92f + totalEnergy * 0.08f;
     m->beatThreshold = m->beatAvgEnergy * sensitivity;
     bool energyBeat = (totalEnergy > m->beatThreshold) && (totalEnergy > m->beatAvgEnergy * energyGate);
@@ -9116,20 +9360,16 @@ static void MusicUpdate(DWORD dwTime) {
         if (diff > 0) flux += diff;  // 只计正变化（能量增加）/ Count only positive changes (energy increase)
         m->prevSpectrum[i] = m->fftSmoothed[i];
     }
-    m->spectralFlux = flux;
     m->avgSpectralFlux = m->avgSpectralFlux * 0.9f + flux * 0.1f;
     bool fluxBeat = (flux > m->avgSpectralFlux * sensitivity) && (flux > m->avgSpectralFlux * fluxGate);
 
     // 方式3：多频段节拍检测
-    m->bassBeatEnergy = m->bassLevel;
     m->bassBeatAvg = m->bassBeatAvg * 0.9f + m->bassLevel * 0.1f;
     m->bassBeat = (m->bassLevel > m->bassBeatAvg * sensitivity) && (m->bassLevel > m->bassBeatAvg * bassGate);
 
-    m->midBeatEnergy = m->midLevel;
     m->midBeatAvg = m->midBeatAvg * 0.9f + m->midLevel * 0.1f;
     m->midBeat = (m->midLevel > m->midBeatAvg * sensitivity * 1.1f);
 
-    m->trebleBeatEnergy = m->trebleLevel;
     m->trebleBeatAvg = m->trebleBeatAvg * 0.9f + m->trebleLevel * 0.1f;
     m->trebleBeat = (m->trebleLevel > m->trebleBeatAvg * sensitivity * 1.2f);
 
@@ -9211,8 +9451,11 @@ static void MusicUpdate(DWORD dwTime) {
 // 端点也不再简单复制首/末点（那会让头部切线为 0、拖尾头看起来发平），改为线性外推。
 static float CrKnotSpan(const D2D1_POINT_2F &a, const D2D1_POINT_2F &b, float alpha) {
     float dx = b.x - a.x, dy = b.y - a.y;
-    float d = sqrtf(dx * dx + dy * dy);
-    return powf(fmaxf(d, 1e-4f), alpha);
+    float d = fmaxf(sqrtf(dx * dx + dy * dy), 1e-4f);
+    // alpha 恒为 0.5（centripetal），powf(x,0.5) 就是 sqrt —— 每帧约 600 次，省下开方外的开销
+    // alpha is always 0.5 (centripetal); powf(x,0.5) is sqrt.
+    if (alpha == 0.5f) return sqrtf(d);
+    return powf(d, alpha);
 }
 // Barry–Goldman 金字塔求值，支持非均匀节点
 static D2D1_POINT_2F CrEval(const D2D1_POINT_2F &p0, const D2D1_POINT_2F &p1,
@@ -9455,7 +9698,6 @@ static void HotkeyRegisterAll() {
     }
     UINT mods = HotkeyModFlags();
     int vks[3] = { g_hotkeyToggleVK, g_hotkeyTrailVK, g_hotkeyParticlesVK };
-    const wchar_t* names[3] = { L"toggle", L"trail", L"particles" };
     for (int i = 0; i < 3; i++) {
         if (vks[i] == 0) continue;
         if (mods == 0) {
@@ -9522,8 +9764,6 @@ static void HotkeyOnSettingsLoaded() {
     g_hotkeyTrailVK = ResolveHotkeyVK(g_hotkeyTrailKey);
     g_hotkeyParticlesVK = ResolveHotkeyVK(g_hotkeyParticlesKey);
 
-    static const wchar_t* kComboName[5] = { L"none (bare key)", L"Alt", L"Alt+Ctrl", L"Alt+Shift", L"Alt+Ctrl+Shift" };
-    int combo = (g_hotkeyModifier >= 0 && g_hotkeyModifier <= 4) ? g_hotkeyModifier : 0;
 
     // 每次都记录（LoadSettings 调用频率很低，不节流，避免漏掉关键信息）
     if (!g_hotkeyToggleVK && !g_hotkeyTrailVK && !g_hotkeyParticlesVK) {
@@ -10083,6 +10323,9 @@ void LoadSettings() {
     g_fxGlowBreath = Wh_GetIntSetting(L"AnimFX.fx_glow_breath") != 0;
     g_fxEdgeFlow = Wh_GetIntSetting(L"AnimFX.fx_edge_flow") != 0;
     g_fxDitherShimmer = Wh_GetIntSetting(L"AnimFX.fx_dither_shimmer") != 0;
+    g_enableCollisionSpark = Wh_GetIntSetting(L"Particles.enable_collision_spark") != 0;
+    g_sparkChance = ClampInt(Wh_GetIntSetting(L"Particles.spark_chance"), 0, 100);
+    g_sparkIntensity = ClampInt(Wh_GetIntSetting(L"Particles.spark_intensity"), 0, 300);
     g_fxStrokeFlow = Wh_GetIntSetting(L"AnimFX.fx_stroke_flow") != 0;
     g_fxBloomThrWave = Wh_GetIntSetting(L"AnimFX.fx_bloom_thr_wave") != 0;
     g_fxBlurPulse = Wh_GetIntSetting(L"AnimFX.fx_blur_pulse") != 0;
@@ -10503,7 +10746,7 @@ static D2D1_COLOR_F ShiftToComplementary(D2D1_COLOR_F c) {
 // 因此用 std::atomic_ref<float> 逐分量原子发布：每个分量对齐到 4 字节，生成的是无锁的普通原子 store。
 // 取舍：变量名与类型完全不变，读侧（不在本次白名单）一行都不用改；代价是读侧仍可能看到"两次更新混合"的
 // 颜色（例如 r 已更新而 g 尚未更新），但每个分量都是完整值，不会出现撕裂值，也不再有 UB。
-// 彻底消除混合需要读侧配合的双缓冲 + 原子索引，见报告「给 orchestrator 的读侧约定」。
+// 读侧改为逐分量 atomic load（见 SnapshotCursorExtractedColor），消除了 memcpy 的非原子读。
 // The sampled colour is written by the background sampler thread and read by the render thread (ComputeColors),
 // so it must be published atomically. D2D1_COLOR_F is a 4-float aggregate that cannot be written as one atomic
 // unit (a 16-byte atomic degrades to a lock and may need libatomic), so each component is stored atomically via
@@ -10712,7 +10955,9 @@ static void ApplySpiralDeformation(std::vector<D2D1_POINT_2F> &pts, DWORD dwTime
 // 闪电变形：沿路径应用随机锯齿，使用统一随机数生成器
 static void ApplyLightningDeformation(std::vector<D2D1_POINT_2F> &pts, DWORD dwTime) {
     if (pts.size() < 3) return;
-    std::vector<D2D1_POINT_2F> result;
+    // 静态暂存：闪电模式每帧调用一次，原写法每帧堆分配一份结果数组再整体拷回
+    static std::vector<D2D1_POINT_2F> result;
+    result.clear();
     result.reserve(pts.size() * 2);
     for (size_t i = 0; i < pts.size() - 1; ++i) {
         result.push_back(pts[i]);
@@ -11224,7 +11469,10 @@ static void CreateMeshFromTriangles(ID2D1DeviceContext *dc, ID2D1Mesh **mesh,
         *mesh = nullptr;
         return;
     }
-    std::vector<D2D1_TRIANGLE> tris;
+    // 静态暂存：该函数每帧被调用 5~9 次（拖尾带 5 + 运动模糊 ≤4），
+    // 原写法每次都堆分配一份三角形数组。调用不嵌套，clear 后复用是安全的。
+    static std::vector<D2D1_TRIANGLE> tris;
+    tris.clear();
     // 四边形带
     if (left.size() >= 2 && right.size() >= 2) {
         size_t n = (std::min)(left.size(), right.size());
@@ -11256,8 +11504,12 @@ static void CreateMeshFromTriangles(ID2D1DeviceContext *dc, ID2D1Mesh **mesh,
 static void CreateMeshFromQuadStrip(ID2D1DeviceContext *dc, ID2D1Mesh **mesh,
                                     const std::vector<D2D1_POINT_2F> &left,
                                     const std::vector<D2D1_POINT_2F> &right) {
-    if (!dc || left.size() < 2 || right.size() < 2)
+    // 早退时也必须解绑旧 mesh：CreateMeshFromTriangles 内部会先 Release，但这条路根本走不到那里，
+    // *mesh 会保留上一帧的内容，渲染时画出一帧陈旧拖尾（残影）。典型触发是 smoothed.size()==1。
+    if (!dc || left.size() < 2 || right.size() < 2) {
+        if (mesh && *mesh) { (*mesh)->Release(); *mesh = nullptr; }
         return;
+    }
     CreateMeshFromTriangles(dc, mesh, left, right, false, {0, 0}, 0.0f);
 }
 
@@ -11266,8 +11518,10 @@ static void CreateMeshFromQuadStripWithCap(ID2D1DeviceContext *dc, ID2D1Mesh **m
                                            const std::vector<D2D1_POINT_2F> &left,
                                            const std::vector<D2D1_POINT_2F> &right,
                                            D2D1_POINT_2F capCenter, float capRadius) {
-    if (!dc)
+    if (!dc) {
+        if (mesh && *mesh) { (*mesh)->Release(); *mesh = nullptr; }   // 同上：早退不留旧 mesh
         return;
+    }
     CreateMeshFromTriangles(dc, mesh, left, right, true, capCenter, capRadius);
 }
 
@@ -11860,7 +12114,10 @@ static void VortexApplyToParticles() {
             float dist = sqrtf(dx * dx + dy * dy);
             if (dist > 2.0f && dist < influenceRadius) {
                 float nx = dx / dist, ny = dy / dist;  // 径向（指向中心）
-                float tx = -ny * rotDir, ty = nx * rotDir;  // 切向（旋转方向）
+                // 切向必须是 (ny,-nx)：n 是【内法线】（指向中心），(-ny,nx) 是外法线的切向公式，
+                // 配在这里会让粒子恒与光标反向盘旋。数值验证：中心(100,100)、粒子(200,100)，
+                // 屏幕系顺时针时该粒子应向下 (0,+1)；用 (-ny,nx) 得到 (0,-1)，方向相反。
+                float tx = ny * rotDir, ty = -nx * rotDir;  // 切向（旋转方向）
                 float radialVel = p.vx * nx + p.vy * ny;
                 float tangentVel = p.vx * tx + p.vy * ty;
 
@@ -11924,8 +12181,8 @@ static void VortexApplyToParticles() {
                 float effectivePressure = pressureForce * (1.0f - decaying * 0.85f);
                 forceOnParticleX += nx * effectivePressure;
                 forceOnParticleY += ny * effectivePressure;
-                p.vx += nx * effectivePressure;
-                p.vy += ny * effectivePressure;
+                p.vx += (nx * effectivePressure) * g_dtScale;
+                p.vy += (ny * effectivePressure) * g_dtScale;
 
                 // 3. 衰减时离心甩出
                 if (decaying > 0.5f) {
@@ -11950,14 +12207,14 @@ static void VortexApplyToParticles() {
                     float tangentForce = tangentError * viscosity * force;
                     forceOnParticleX += tx * tangentForce;
                     forceOnParticleY += ty * tangentForce;
-                    p.vx += tx * tangentForce;
-                    p.vy += ty * tangentForce;
+                    p.vx += (tx * tangentForce) * g_dtScale;
+                    p.vy += (ty * tangentForce) * g_dtScale;
 
                     float radialDamping = -radialVel * 0.04f * force;
                     forceOnParticleX += nx * radialDamping;
                     forceOnParticleY += ny * radialDamping;
-                    p.vx += nx * radialDamping;
-                    p.vy += ny * radialDamping;
+                    p.vx += (nx * radialDamping) * g_dtScale;
+                    p.vy += (ny * radialDamping) * g_dtScale;
 
                     // 软弹簧约束
                     float massOrbitFactor = g_enableParticleMass ? powf(p.mass, 0.333f) : 1.0f;
@@ -11985,16 +12242,16 @@ static void VortexApplyToParticles() {
                         springForce -= radialVel * 0.015f * force;
                         forceOnParticleX += nx * springForce;
                         forceOnParticleY += ny * springForce;
-                        p.vx += nx * springForce;
-                        p.vy += ny * springForce;
+                        p.vx += (nx * springForce) * g_dtScale;
+                        p.vy += (ny * springForce) * g_dtScale;
                     }
 
                     float orbitAngle = atan2f(p.y - v.centerY, p.x - v.centerX);
                     float precession = 0.0015f * force * sinf(orbitAngle * 2.0f);
                     forceOnParticleX += tx * precession;
                     forceOnParticleY += ty * precession;
-                    p.vx += tx * precession;
-                    p.vy += ty * precession;
+                    p.vx += (tx * precession) * g_dtScale;
+                    p.vy += (ty * precession) * g_dtScale;
                 }
 
                 // 5. 3D轨道倾角 + 亮度
@@ -12102,7 +12359,6 @@ static float CoherentNoise(float x, float y, float t, int seed) {
 // （全局钩子是稳定性风险，且无法可靠看到 Fn 上报的码）。
 static void PollHotkeys() {
     int vks[3] = { g_hotkeyToggleVK, g_hotkeyTrailVK, g_hotkeyParticlesVK };
-    static const wchar_t* kNames[3] = { L"toggle", L"trail", L"particles" };
     bool anyBound = (vks[0] || vks[1] || vks[2]);
 
     // 首帧记录一次：证明渲染线程在跑、且轮询函数真的被调用了
@@ -12256,6 +12512,13 @@ static void RenderFrame() {
     // v3.4.2.2 热键轮询：必须在任何提前 return 之前，这样窗口隐藏时空闲帧也能响应热键
     PollHotkeys();
     DWORD dwTime = GetTickCount();
+    {   // 物理量按真实帧间隔换算（粒子与形状两处共用，故存在全局）
+        DWORD dtMs = dwTime - g_lastPhysicsTime;     // DWORD 减法天然回绕，安全
+        g_lastPhysicsTime = dwTime;
+        if (dtMs == 0 || dtMs > 200) g_dtScale = 1.0f;   // 首帧/长卡顿：按 60Hz 处理
+        // 用 fminf/fmaxf 而不是本文件的 Clamp()：后者定义在文件后部，这里还看不到
+        else g_dtScale = fminf(fmaxf((float)dtMs / (1000.0f / 60.0f), 0.25f), 4.0f);
+    }
     POINT pt;
     GetCursorPos(&pt);
     // v3.4.2.2 DPI：光标移到其他显示器时按需重算（复用上面的 pt，避免多一次系统调用）
@@ -12313,7 +12576,8 @@ static void RenderFrame() {
 
     // 每帧刷新一次效果动画系数（各渲染子函数直接读全局值）
     UpdateFxAnimations(dwTime);
-    int vX = g_virtX, vY = g_virtY;
+    int vX, vY, vW, vH;
+    LoadVirtualScreen(vX, vY, vW, vH);   // 四个值同批，避免读到新旧混合的尺寸
 
     static DWORD lastFsCheck = 0;
     static bool isGameCached = false, trailActive = false;
@@ -12361,7 +12625,7 @@ static void RenderFrame() {
                                        [&](const Ripple &r) { return dwTime - r.startTime > (DWORD)g_clickDuration; }),
                         g_ripples.end());
 
-    int vW = g_virtW, vH = g_virtH;
+
 
     if (isGameCached) {
         // 游戏中隐藏覆盖层窗口，避免全屏顶层窗口阻挡游戏的独立翻转/MPO
@@ -13009,6 +13273,17 @@ static void RenderFrame() {
                                 float dvy = g_particles[i].vy - g_particles[j].vy;
                                 float vn = dvx * nx + dvy * ny;
                                 if (vn < 0.0f) {  // 正在接近才碰撞
+                                    // 碰撞火花：只��法向接近速度够大时才生成（慢速贴靠不冒火花），
+                                    // 碰撞点取两个粒子的中点。预算耗尽时 SpawnCollisionSpark 直接返回。
+                                    // 概率触发：密度与碰撞次数成正比，而不是靠每帧预算撞运气。
+                                    // 预算仍在，但已放宽成安全上限（见每帧重置处）。
+                                    if (g_enableCollisionSpark && vn < -3.0f
+                                        && (int)(rand() % 100) < g_sparkChance) {
+                                        SpawnCollisionSpark(
+                                            (g_particles[i].x + g_particles[j].x) * 0.5f,
+                                            (g_particles[i].y + g_particles[j].y) * 0.5f,
+                                            nx, ny, -vn);
+                                    }
                                     float impulse = (2.0f * vn) / totalMass;
                                     g_particles[i].vx -= impulse * mj * nx;
                                     g_particles[i].vy -= impulse * mj * ny;
@@ -13192,7 +13467,12 @@ static void RenderFrame() {
     const float kAttractDeadZoneSq = 4.0f;  // 2px 死区：贴上路径就停手，免抖动
     const float kAttractVelGain = 0.06f;  // 位移→速度换算，≈阻力系数量级
     const int kTrailSampleStep = 3;  // 拖尾最近点搜索的稀疏步长
-    const float MAX_SPEED = 25.0f;  // 速度上限（像素/帧）/ Speed cap (pixels/frame)
+    // 25 px/帧 @60Hz == 1500 px/秒；乘 dtScale 后任何刷新率下都是同一个物理上限
+    // 25 px/frame at 60Hz == 1500 px/s; scaling by dtScale makes the cap refresh-rate independent.
+    // 每帧重置火花预算（碰撞是热路径，没有预算就会在密集碰撞时刷出上万个粒子）
+    // 每帧预算现在是**安全上限**（防极端情况刷屏），密度主要由 spark_chance 控制
+    g_sparkBudget = g_enableCollisionSpark ? (120 + g_sparkIntensity) : 0;
+    const float MAX_SPEED = 25.0f * g_dtScale;
     const float MAX_SPEED_SQ = MAX_SPEED * MAX_SPEED;
     // v3.4.2.2 热键：粒子隐藏时整个逐粒子物理更新（阻力/风/引力/排斥/吸附等速度更新）直接跳过
     if (particlesOn)
@@ -13210,24 +13490,28 @@ static void RenderFrame() {
         float linearDrag = 1.0f - dragCoeff;
         float quadraticDrag = speed > 10.0f ? (1.0f - dragCoeff * 0.5f * (speed - 10.0f) / 15.0f) : 1.0f;
         float totalDrag = fmaxf(fminf(linearDrag * quadraticDrag, 0.98f), 0.80f);
-        p.vx *= totalDrag;
-        p.vy *= totalDrag;
+        // 指数衰减必须用 powf 才帧率无关：v *= drag 每帧一次，144Hz 下等于每秒衰减 144 次；
+        // powf(drag, dtScale) 换算成"同样 dt 秒内衰减同样比例"。
+        // Exponential decay needs powf to be refresh-rate independent.
+        float dragPow = powf(totalDrag, g_dtScale);
+        p.vx *= dragPow;
+        p.vy *= dragPow;
         // 环境重力：等效原理，加速度与质量无关（不乘invMass）/ Environmental gravity: equivalence principle, accel mass-independent (no invMass)
         if (g_enableEnvGravity) {
-            p.vx += cosf(g_envGravityAngle) * g_envGravityStrength;
-            p.vy += sinf(g_envGravityAngle) * g_envGravityStrength;
+            p.vx += (cosf(g_envGravityAngle) * g_envGravityStrength) * g_dtScale;
+            p.vy += (sinf(g_envGravityAngle) * g_envGravityStrength) * g_dtScale;
         }
         // 环境风：表面力，轻粒子被吹得更远（乘invMass，像羽毛vs石头）/ Environmental wind: surface force, light particles blow further (x invMass, feather vs stone)
         if (g_enableEnvWind) {
-            p.vx += g_windX * invMass;
-            p.vy += g_windY * invMass;
+            p.vx += (g_windX * invMass) * g_dtScale;
+            p.vy += (g_windY * invMass) * g_dtScale;
         }
         // 音乐节拍脉冲：每拍给粒子一个径向速度爆发（从光标向外）/ Music beat pulse: radial velocity burst per beat (outward from cursor)
         if (g_enableMusicPhysics && g_musicBeatPulseAmount > 0.01f && toCursorDistSq > 1.0f) {
             float pdist = sqrtf(toCursorDistSq);
             float pulseForce = g_musicBeatPulseAmount * 8.0f * invMass;
-            p.vx += (toCursorDx / pdist) * pulseForce;
-            p.vy += (toCursorDy / pdist) * pulseForce;
+            p.vx += ((toCursorDx / pdist) * pulseForce) * g_dtScale;
+            p.vy += ((toCursorDy / pdist) * pulseForce) * g_dtScale;
         }
         // 光标周围排斥力：加速度=F/m，质量大的加速度小
         if (g_enableParticleRepel && g_particleRepelForce > 0 && toCursorDistSq < (float)g_particleRepelRadius * g_particleRepelRadius && toCursorDistSq > 0.25f) {
@@ -13236,12 +13520,12 @@ static void RenderFrame() {
             float falloff = 1.0f - rdist / (float)g_particleRepelRadius;
             float force = falloff * g_particleRepelForce;
             float accel = force * invMass;
-            p.vx += nx * accel;
-            p.vy += ny * accel;
+            p.vx += (nx * accel) * g_dtScale;
+            p.vy += (ny * accel) * g_dtScale;
             float perturb = force * 0.65f * invMass;
             float angle = Rand01() * 6.28318f;
-            p.vx += cosf(angle) * perturb;
-            p.vy += sinf(angle) * perturb;
+            p.vx += (cosf(angle) * perturb) * g_dtScale;
+            p.vy += (sinf(angle) * perturb) * g_dtScale;
         }
         // 洛伦兹力：带电粒子在磁场中做圆周运动 F = q(v × B)
         // 2D中：F = q * B * (-vy, vx)。
@@ -13258,8 +13542,8 @@ static void RenderFrame() {
             if (g_enableMultiBandLink) B *= (1.0f + g_midRepelBoost * 0.5f);
             float lx = -p.vy * B * p.charge;
             float ly = p.vx * B * p.charge;
-            p.vx += lx * invMass;
-            p.vy += ly * invMass;
+            p.vx += (lx * invMass) * g_dtScale;
+            p.vy += (ly * invMass) * g_dtScale;
         }
         // 布朗运动：空间连贯湍流场（Perlin-like），比纯随机更自然
         if (g_enableBrownianMotion) {
@@ -13267,8 +13551,8 @@ static void RenderFrame() {
             if (g_enableMultiBandLink) noise *= (1.0f + g_trebleNoiseBoost * 2.0f);
             float nx = CoherentNoise(p.x * 0.02f, p.y * 0.02f, dwTime * 0.001f, 1);
             float ny = CoherentNoise(p.x * 0.02f + 100.0f, p.y * 0.02f + 100.0f, dwTime * 0.001f, 2);
-            p.vx += nx * noise * invMass;
-            p.vy += ny * noise * invMass;
+            p.vx += (nx * noise * invMass) * g_dtScale;
+            p.vy += (ny * noise * invMass) * g_dtScale;
         }
         // 库仑力：同号电荷相斥，异号电荷相吸（粒子间）/ Coulomb force: like charges repel, opposite attract (between particles)
         // P1-7 核查结论：本循环【不可】与上方的「排斥/碰撞/粘性/弹簧」i<j 配对循环合并。
@@ -13314,8 +13598,9 @@ static void RenderFrame() {
         // 空气阻力受粒子大小影响：大粒子迎风面积大，阻力更大
         if (g_enableParticleMass && p.size > 2.0f) {
             float sizeDrag = 1.0f - fminf(p.size * 0.002f, 0.02f);
-            p.vx *= sizeDrag;
-            p.vy *= sizeDrag;
+            float sizeDragPow = powf(sizeDrag, g_dtScale);   // 同样是指数衰减
+            p.vx *= sizeDragPow;
+            p.vy *= sizeDragPow;
         }
         // ===== 拖尾吸附 / Trail attraction =====
         // 目标不是"光标这一个点"，而是【拖尾路径上离粒子最近的位置】：粒子被拖尾带走、
@@ -13367,8 +13652,8 @@ static void RenderFrame() {
                     // it is damped by drag instead, so the steady-state speed is accel/dragCoeff; scale by
                     // a drag-magnitude gain to keep the feel comparable.
                     float accel = g_particleAttraction * falloff * d * kAttractVelGain;
-                    p.vx += (ddx / d) * accel;
-                    p.vy += (ddy / d) * accel;
+                    p.vx += ((ddx / d) * accel) * g_dtScale;
+                    p.vy += ((ddy / d) * accel) * g_dtScale;
                 }
             }
         }
@@ -13691,12 +13976,6 @@ static void RenderFrame() {
         surfaceDirty = true;
     }
 
-    // ===== 拖尾带渲染（锥形，D2D 回退路径由此获得拖尾）=====
-    if (trailOn && tailVisible && havePath && (g_trailShape == 0 || g_trailShape == 2 || g_trailShape == 3 || g_trailShape == 7)) {
-        DrawTrailBand(smoothed, cols, widthMul, g_fadeAlpha, 0, 0);
-        surfaceDirty = true;
-    }
-
     // ===== 形状拖尾渲染 =====
     if (trailOn && !g_trailShapes.empty()) {  // v3.4.2.2 热键：拖尾关闭时不绘制形状拖尾
         // 屏幕尺寸对 D2D 后端无意义（不走顶点缓冲）
@@ -13882,7 +14161,9 @@ static void RenderFrame() {
             g_pD2DDC->SetAntialiasMode(D2D1_ANTIALIAS_MODE_ALIASED);
             // ===== 阴影层（mesh）=====
             if (g_enableTrailShadow && lo.size() >= 2) {
-                std::vector<D2D1_POINT_2F> slo, sro;
+                // 静态暂存：与上面 lo/ro/... 同一套做法，避免阴影层每帧 2 次堆分配
+                static std::vector<D2D1_POINT_2F> slo, sro;
+                slo.clear(); sro.clear();
                 slo.reserve(lo.size());
                 sro.reserve(ro.size());
                 for (size_t i = 0; i < lo.size(); i++) {
@@ -14163,7 +14444,13 @@ static bool InitAllRenderResources() {
     }
 
     // ---- 交换链 ----
-    RecreateSwapChain(g_virtW, g_virtH);
+    // 这里在渲染线程，而 g_virt* 由 UI 线程的 UpdateVirtualScreenCache 写 -> 必须走 seqlock 快照，
+    // 否则可能拿到"新宽 + 旧高"这种跨批组合。UI 线程内的同线程读取不受影响，无需改。
+    {
+        int vx, vy, vw, vh;
+        LoadVirtualScreen(vx, vy, vw, vh);
+        RecreateSwapChain(vw, vh);
+    }
 
     // ---- D3D11 原生渲染初始化（v3）----
     InitNativeRendering();
@@ -14174,12 +14461,14 @@ static bool InitAllRenderResources() {
 
 // ===================== 覆盖层线程 =====================
 static void UpdateVirtualScreenCache() {
-    g_virtX = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    g_virtY = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    g_virtW = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    g_virtH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    int nx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    int ny = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int nw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int nh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
     // 高度减 1 避免与 DWM 合成边界完全重合导致的渲染问题
-    if (g_virtH > 1) g_virtH -= 1;
+    if (nh > 1) nh -= 1;
+    // 一次发布四个值，避免渲染线程读到跨批的组合
+    PublishVirtualScreen(nx, ny, nw, nh);
 }
 static LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == WM_HOTKEY) {
@@ -14376,7 +14665,13 @@ DWORD WINAPI RenderThreadProc(LPVOID) {
     }
 
     // ---- 交换链 ----
-    RecreateSwapChain(g_virtW, g_virtH);
+    // 这里在渲染线程，而 g_virt* 由 UI 线程的 UpdateVirtualScreenCache 写 -> 必须走 seqlock 快照，
+    // 否则可能拿到"新宽 + 旧高"这种跨批组合。UI 线程内的同线程读取不受影响，无需改。
+    {
+        int vx, vy, vw, vh;
+        LoadVirtualScreen(vx, vy, vw, vh);
+        RecreateSwapChain(vw, vh);
+    }
     GetCursorPos(&g_lastPos);
 
     // ---- 后台采样线程（把 GDI 回读从渲染线程剥离，避免阻塞 vsync）----
