@@ -8176,7 +8176,7 @@ static void NativeRenderDotChain(const std::vector<D2D1_POINT_2F>& path, float d
 
     for (size_t i = 0; i < path.size(); i++) {
         float ratio = (float)i / (path.size() - 1);
-        float taper = powf(1.0f - ratio, 1.3f);
+        float taper = MtTaperFactor(ratio);  // LUT，与拖尾带锥形公式一致 / LUT, matches trail-band taper
         float size = dotSize * taper;
         if (size < 0.5f) continue;
 
@@ -8721,13 +8721,50 @@ static bool NativeRenderFrame(int screenW, int screenH, const std::vector<D2D1_P
     if (trailOn && tailVisible && !smoothed.empty() && g_trailShape != 4 && g_trailShape != 10) {  // v3.4.2.2 热键：拖尾关闭时跳过步骤 2
         if (g_trailShape == 1) {
             // 点链：沿路径生成离散圆点
+            // 弧长共享采样：原实现每点两次 O(n) 遍历（总长+定位），200 点 ≈ 8 万次迭代+sqrtf/帧。
+            // 改为一次遍历算总长 + 指针线性推进（t 单调 → j 只前进），输出逐位等价（累加顺序一致）。
+            // Shared-arc sampling: the old per-dot code ran two O(n) passes (total length + locate);
+            // 200 dots = ~80k iterations+sqrtf per frame. Now one pass + a monotonic walk, bit-identical
+            // (same accumulation order).
             std::vector<D2D1_POINT_2F>& dots = s_dots; dots.clear();
             int dotCount = (int)smoothed.size() * g_dotsMultiplier;
             if (dotCount > 200) dotCount = 200;
-            for (int i = 0; i < dotCount; i++) {
-                float t = i / (float)(dotCount - 1);
-                D2D1_POINT_2F p = GetPointOnPath(smoothed, t);
-                dots.push_back(p);
+            if (smoothed.size() < 2) {
+                for (int i = 0; i < dotCount; i++)
+                    dots.push_back(smoothed.empty() ? D2D1::Point2F(0, 0) : smoothed[0]);
+            } else {
+                float totalLen = 0;
+                for (size_t i = 1; i < smoothed.size(); i++) {
+                    float dx = smoothed[i].x - smoothed[i - 1].x, dy = smoothed[i].y - smoothed[i - 1].y;
+                    totalLen += sqrtf(dx * dx + dy * dy);
+                }
+                size_t j = 1;
+                float acc = 0;
+                for (int i = 0; i < dotCount; i++) {
+                    float t = dotCount > 1 ? i / (float)(dotCount - 1) : 0;
+                    D2D1_POINT_2F p;
+                    bool found = false;
+                    if (t <= 0) {
+                        p = smoothed[0]; found = true;
+                    } else if (t >= 1) {
+                        p = smoothed.back(); found = true;
+                    } else {
+                        float target = t * totalLen;
+                        while (j + 1 < smoothed.size()) {
+                            float dx = smoothed[j].x - smoothed[j - 1].x, dy = smoothed[j].y - smoothed[j - 1].y;
+                            float segLen = sqrtf(dx * dx + dy * dy);
+                            if (acc + segLen >= target) {
+                                float f = segLen > 0 ? (target - acc) / segLen : 0;
+                                p = D2D1::Point2F(smoothed[j - 1].x + dx * f, smoothed[j - 1].y + dy * f);
+                                found = true;
+                                break;
+                            }
+                            acc += segLen;
+                            j++;
+                        }
+                    }
+                    dots.push_back(found ? p : smoothed.back());
+                }
             }
             float dotSize = 4.0f * widthMul * (g_dotChainSize / 100.0f);
             NativeRenderDotChain(dots, dotSize, cols, fadeAlpha, screenW, screenH);
@@ -11606,7 +11643,7 @@ static void RenderMotionBlur(float widthMul, const GradData &cols, float fadeAlp
             if (ln > 0) { ddx /= ln; ddy /= ln; } else { ddx = 1; ddy = 0; }
             float nx = -ddy, ny = ddx;
             float ratio = (float)i / (histPath.size() - 1);
-            float ow = 10.0f * powf(1.0f - ratio, 1.3f) * widthMul;
+            float ow = 10.0f * MtTaperFactor(ratio) * widthMul;  // LUT / LUT lookup
             if (i == histPath.size() - 1) ow = 0;
             hlo.push_back(D2D1::Point2F(histPath[i].x + nx*ow, histPath[i].y + ny*ow));
             hro.push_back(D2D1::Point2F(histPath[i].x - nx*ow, histPath[i].y - ny*ow));
@@ -14135,7 +14172,7 @@ static void RenderFrame() {
                     ddy = 0;
                 }
                 float nx = -ddy, ny = ddx, ratio = (float)i / (sl - 1);
-                float taper = powf(1.0f - ratio, 1.3f);
+                float taper = MtTaperFactor(ratio);  // LUT / LUT lookup
                 float ow = 10.0f * taper * widthMul;
                 float cw = 6.0f * taper * widthMul;
                 if (i == sl - 1) {
